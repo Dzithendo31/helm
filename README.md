@@ -57,6 +57,8 @@ edit them to change agent behavior without touching code.
 
 ## Usage
 
+> See [USAGE.md](./USAGE.md) for the full guide (flags, modes, reading the artifact store).
+
 ```bash
 npm install
 

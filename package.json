@@ -2,6 +2,7 @@
   "name": "helm",
   "version": "0.1.0",
   "description": "Helm — a reasoning agent orchestrator on the Claude Agent SDK",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "helm": "./dist/cli.js"
