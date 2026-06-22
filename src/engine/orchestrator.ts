@@ -52,6 +52,7 @@ import { runGate } from "../teams/gate";
 import type { TeamConfig, Teams } from "../teams/types";
 import type { HelmConfig } from "../config";
 import type { HumanInterface } from "./checkpoints";
+import { noopReporter, type Reporter } from "./events";
 import { persistRun } from "./store";
 
 /** Estimated tokens a single QA review pass would cost — for optimise-mode counterfactuals. */
@@ -74,6 +75,8 @@ export interface RunInput {
   readonly devWritesFiles?: boolean;
   /** Workspace directory Dev operates in (required when devWritesFiles is true). */
   readonly workspace?: string;
+  /** Live progress channel (the CLI renders a spinner + step log). */
+  readonly report?: Reporter;
 }
 
 export interface RunResult {
@@ -216,6 +219,7 @@ const led = (
 /** Run Helm end to end on a single request. */
 export const runHelm = async (input: RunInput): Promise<RunResult> => {
   const { config, runner, human, teams } = input;
+  const report = input.report ?? noopReporter;
   const baseDir = input.baseDir ?? process.cwd();
   const devWrites = input.devWritesFiles === true && typeof input.workspace === "string";
   const devTools = devWrites ? DEV_TOOLS : undefined;
@@ -233,6 +237,7 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
   let feedback: string | undefined;
 
   for (let attempt = 0; attempt <= MAX_SPEC_REVISIONS; attempt += 1) {
+    report({ kind: "begin", icon: "⚓", label: "Helm-Leader · writing the spec" });
     const specRes = await runner.run({
       team: teams["Helm-Leader"].name,
       model: teams["Helm-Leader"].model,
@@ -250,9 +255,11 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
     rawSpec = specRes.text;
     seeds = parseSeeds(specRes.data);
     if (seeds.length === 0) {
+      report({ kind: "end", icon: "⚓", label: "Spec did not parse into requirements", status: "error" });
       malformed = true;
       break;
     }
+    report({ kind: "end", icon: "⚓", label: `Spec · ${seeds.length} requirements`, status: "ok" });
     const title =
       specRes.data && typeof specRes.data === "object" && typeof (specRes.data as { title?: unknown }).title === "string"
         ? (specRes.data as { title: string }).title
@@ -321,6 +328,7 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
     agent: "leader",
     reason: "human approved",
   });
+  report({ kind: "info", icon: "✓", label: "Spec approved" });
 
   const requirements: readonly Requirement[] = specBody.requirements;
   const triageById = new Map<string, { risk: Risk; confidence: Confidence; rationale?: string }>();
@@ -334,6 +342,7 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
   });
 
   // ── 2. Leader designs the Workflow (REQ-4) ────────────────────────────────
+  report({ kind: "begin", icon: "⚓", label: "Helm-Leader · designing the workflow" });
   const wfRes = await runner.run({
     team: teams["Helm-Leader"].name,
     model: teams["Helm-Leader"].model,
@@ -343,28 +352,45 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
     payload: { requirements },
   });
   ledger = record(ledger, led(teams["Helm-Leader"], "workflow", wfRes.usage));
+  const workflowBody = parseWorkflow(wfRes.data);
   const workflowArtifact = createArtifact<WorkflowBody>({
     type: "Workflow",
-    body: parseWorkflow(wfRes.data),
+    body: workflowBody,
     refs: requirementIds(specBody),
     state: "Accepted",
     provenance: { team: "Helm-Leader", agent: "leader", reason: "design workflow" },
   });
+  report({ kind: "end", icon: "⚓", label: `Workflow · ${workflowBody.steps.length} steps`, status: "ok" });
+  if (workflowBody.steps.length > 0) {
+    report({ kind: "info", icon: "📐", label: "Workflow plan:" });
+    workflowBody.steps.forEach((step, i) =>
+      report({ kind: "info", icon: " ", label: `   ${i + 1}. ${step}` }),
+    );
+  }
+  report({ kind: "info", icon: "⚖", label: `Triaging ${requirements.length} requirements by risk` });
 
   // ── 3. Per-requirement: triage → research? → Dev → gate (REQ-5, REQ-7, REQ-8) ─
   const tasks: Artifact<TaskBody>[] = [];
   const triageDecisions: TriageDecision[] = [];
   let escalated = false;
   let workspaceSnapshot = devCwd ? listWorkspaceFiles(devCwd) : new Set<string>();
+  const total = requirements.length;
 
-  for (const req of requirements) {
+  for (const [reqIndex, req] of requirements.entries()) {
+   const pos = `[${reqIndex + 1}/${total}]`;
    try {
     const hint = triageById.get(req.id) ?? { risk: "medium" as Risk, confidence: "medium" as Confidence };
     const rigor = triage(hint);
     const researched = needsResearch(rigor);
     let researchFindings = "";
+    report({
+      kind: "info",
+      icon: "⚖",
+      label: `${pos} ${req.id} · ${hint.risk} risk / ${hint.confidence} confidence → ${rigor}`,
+    });
 
     if (researched) {
+      report({ kind: "begin", icon: "🔬", label: `${pos} Research · de-risking ${req.id}` });
       const research = await runner.run<{ findings?: unknown }>({
         team: teams.Research.name,
         model: teams.Research.model,
@@ -378,6 +404,7 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
       });
       ledger = record(ledger, led(teams.Research, req.id, research.usage, rigor));
       if (typeof research.data?.findings === "string") researchFindings = research.data.findings;
+      report({ kind: "end", icon: "🔬", label: `${pos} Research · ${req.id}`, status: "ok" });
     }
 
     // Research de-risks: record the raised confidence and the rationale.
@@ -391,6 +418,8 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
       ...(hint.rationale ? { rationale: hint.rationale } : {}),
     });
 
+    report({ kind: "info", icon: "📋", label: `${pos} Task created · ${req.id} → Dev team` });
+    report({ kind: "begin", icon: "🔨", label: `${pos} Dev · implementing ${req.id}` });
     const existingFiles = devCwd ? [...workspaceSnapshot].sort() : [];
     const devInstruction = devWrites
       ? [
@@ -421,6 +450,7 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
       ...(devCwd ? { cwd: devCwd } : {}),
     });
     ledger = record(ledger, led(teams.Dev, req.id, prod.usage, rigor));
+    report({ kind: "end", icon: "🔨", label: `${pos} Dev · ${req.id}`, status: "ok" });
 
     const body: TaskBody = {
       title: typeof prod.data?.title === "string" ? prod.data.title : `Work for ${req.id}`,
@@ -442,6 +472,7 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
     const critic: TeamConfig | null =
       config.teamMode && needsTeamReview(rigor) ? teams.Quality : null;
 
+    if (critic) report({ kind: "begin", icon: "🔎", label: `${pos} Quality · reviewing ${req.id}` });
     const gate = await runGate({
       artifact: draft,
       producer: teams.Dev,
@@ -452,6 +483,14 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
       ...(devTools ? { producerTools: devTools } : {}),
       ...(devCwd ? { producerCwd: devCwd } : {}),
     });
+    if (critic) {
+      report({
+        kind: "end",
+        icon: "🔎",
+        label: `${pos} Quality · ${req.id} (${gate.cycles} cycle${gate.cycles === 1 ? "" : "s"})`,
+        status: gate.escalated ? "warn" : "ok",
+      });
+    }
     ledger = gate.ledger;
     reviews.push(...gate.reviews);
 
@@ -470,6 +509,13 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
     }
     tasks.push(finalTask);
     if (gate.escalated) escalated = true;
+    const fileCount = finalTask.body.files.length;
+    report({
+      kind: "info",
+      icon: gate.escalated ? "⚠" : "✓",
+      label: `${pos} ${req.id} ${gate.escalated ? "escalated to human" : "done"}${fileCount ? ` · ${fileCount} file${fileCount === 1 ? "" : "s"}` : ""}`,
+      status: gate.escalated ? "warn" : "ok",
+    });
 
     if (critic === null) {
       // optimise-mode: record the QA review triage let us avoid.
@@ -503,11 +549,13 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
         ),
       );
       escalated = true;
+      report({ kind: "end", icon: "⚠", label: `${pos} ${req.id} failed: ${message.slice(0, 80)}`, status: "error" });
     }
   }
 
   // ── 4. Watchmen: reasoning-only spec-drift check (REQ-10) ──────────────────
   // Structural matrix first, then fold in the Watchmen's semantic judgment.
+  report({ kind: "begin", icon: "👁", label: "Watchmen · checking for spec drift" });
   let matrix = buildMatrix(requirements, tasks.map(toTaskRecord));
   try {
     const watch = await runner.run({
@@ -542,7 +590,19 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
 
   const drift = hasDrift(matrix);
   const gaps = hasGaps(matrix);
+  report({
+    kind: "end",
+    icon: "👁",
+    label: drift ? "Watchmen · DRIFT detected" : "Watchmen · no drift",
+    status: drift ? "warn" : "ok",
+  });
   const status: RunStatus = escalated ? "needs-human" : drift ? "halted" : "delivered";
+  report({
+    kind: "info",
+    icon: status === "delivered" ? "🏁" : "⚠",
+    label: `Run ${status}`,
+    status: status === "delivered" ? "ok" : "warn",
+  });
 
   const storeDir = await persistRun(baseDir, runId, {
     spec: specArtifact,

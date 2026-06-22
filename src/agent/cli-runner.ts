@@ -1,6 +1,20 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import type { AgentRequest, AgentResponse, AgentRunner, AgentUsage } from "./runner";
 import { buildAgentPrompt, parseJsonLoose } from "./prompt";
+
+/** In-flight claude subprocesses, so an interrupt handler can kill them all. */
+const activeChildren = new Set<ChildProcess>();
+
+export const killActiveClaudeProcesses = (): void => {
+  for (const child of activeChildren) {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      /* already gone */
+    }
+  }
+  activeChildren.clear();
+};
 
 /**
  * Runs each agent as a `claude --print` subprocess (the "Claude Code is the
@@ -81,6 +95,7 @@ const defaultExec: CommandExecutor = (bin, args, opts) =>
       stdio: ["ignore", "pipe", "pipe"],
       ...(opts.cwd ? { cwd: opts.cwd } : {}),
     });
+    activeChildren.add(child);
     let stdout = "";
     let stderr = "";
     const timer = setTimeout(() => {
@@ -91,10 +106,12 @@ const defaultExec: CommandExecutor = (bin, args, opts) =>
     child.stderr.on("data", (d: Buffer) => (stderr += d.toString()));
     child.on("error", (err) => {
       clearTimeout(timer);
+      activeChildren.delete(child);
       reject(err);
     });
     child.on("close", (code) => {
       clearTimeout(timer);
+      activeChildren.delete(child);
       resolve({ stdout, stderr, code });
     });
   });

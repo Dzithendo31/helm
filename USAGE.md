@@ -18,6 +18,23 @@ npm test             # optional: confirm the test suite passes
 
 Run via `npm run dev -- "<request>" [flags]` (no build step needed; `tsx` runs the TS directly).
 
+### Install globally (use `helm` from any repo)
+
+```bash
+npm run build && npm link     # puts `helm` on your PATH
+```
+
+Then run it from anywhere — roles resolve from the install automatically (no
+`HELM_ROLES_DIR` needed), and you can build straight into the current project:
+
+```bash
+cd /path/to/your-project
+helm "Add a /health endpoint that returns build info" --build --workspace . --no-team-mode
+```
+
+Helm refuses only to `--build` into its own install directory. The `.helm/` run store
+is written to wherever you invoke it, so add `.helm/` to that project's `.gitignore`.
+
 ## 3. Your first run — offline, instant, free
 
 ```bash

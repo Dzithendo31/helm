@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 import { mkdirSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { defaultConfig, type HelmConfig } from "./config";
 import { ClaudeAgentRunner } from "./agent/claude-runner";
-import { ClaudeCliRunner } from "./agent/cli-runner";
+import { ClaudeCliRunner, killActiveClaudeProcesses } from "./agent/cli-runner";
 import { MockAgentRunner } from "./agent/mock-runner";
 import type { AgentRunner } from "./agent/runner";
+import type { Reporter, RunEvent } from "./engine/events";
 import { DEFAULT_MODELS, buildTeams, type ModelMap } from "./teams/definitions";
 import { applyRolesFromDir } from "./teams/roles";
 import {
@@ -16,6 +18,70 @@ import {
 } from "./engine/checkpoints";
 import { runHelm } from "./engine/orchestrator";
 import { savingsReport } from "./core/ledger";
+
+/** The Helm install root (one level up from src/ or dist/), so roles and the
+ * build guard work regardless of the current working directory. */
+const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+/** True when `target` is the Helm install dir or anything inside it. */
+const isInsideHelm = (target: string): boolean => {
+  const rel = relative(PACKAGE_ROOT, target);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+};
+
+const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/** Live terminal renderer: a spinner with elapsed time per step, plus a step log. */
+const createConsoleReporter = (out: NodeJS.WriteStream = process.stdout) => {
+  const tty = Boolean(out.isTTY);
+  let timer: ReturnType<typeof setInterval> | null = null;
+  let active: { label: string; icon: string; start: number } | null = null;
+  let frame = 0;
+
+  const clear = (): void => {
+    if (tty) out.write("\r[K");
+  };
+  const draw = (): void => {
+    if (!active) return;
+    frame = (frame + 1) % SPINNER.length;
+    const secs = Math.round((Date.now() - active.start) / 1000);
+    clear();
+    out.write(`${SPINNER[frame]} ${active.icon} ${active.label} … ${secs}s`);
+  };
+  const stop = (): void => {
+    if (timer) {
+      clearInterval(timer);
+      timer = null;
+    }
+    clear();
+    active = null;
+  };
+  const mark = (status?: RunEvent["status"]): string =>
+    status === "error" ? "✗" : status === "warn" ? "⚠" : "✓";
+
+  const report: Reporter = (e) => {
+    if (e.kind === "begin") {
+      stop();
+      active = { label: e.label, icon: e.icon ?? "•", start: Date.now() };
+      if (tty) {
+        draw();
+        timer = setInterval(draw, 120);
+        timer.unref?.();
+      } else {
+        out.write(`  … ${e.label}\n`);
+      }
+    } else if (e.kind === "end") {
+      const secs = active ? ` (${((Date.now() - active.start) / 1000).toFixed(1)}s)` : "";
+      stop();
+      out.write(`  ${mark(e.status)} ${e.label}${secs}\n`);
+    } else {
+      stop();
+      out.write(`  ${e.icon ?? "·"} ${e.label}\n`);
+    }
+  };
+
+  return { report, stop };
+};
 
 type RunnerKind = "cli" | "sdk" | "mock";
 
@@ -106,18 +172,37 @@ const main = async (): Promise<void> => {
   }
 
   const models = args.modelOverride ? uniformModels(args.modelOverride) : DEFAULT_MODELS;
-  const rolesDir = process.env.HELM_ROLES_DIR ?? "roles";
+  const rolesDir = process.env.HELM_ROLES_DIR ?? join(PACKAGE_ROOT, "roles");
   const teams = applyRolesFromDir(buildTeams(models), rolesDir);
 
   const runner = selectRunner(args.runner, args.bare, args.build);
   const human = selectHuman(args.config, args.runner);
+  const reporter = createConsoleReporter();
+
+  // Ctrl-C: stop the spinner, kill in-flight claude subprocesses, and exit.
+  let interrupting = false;
+  process.on("SIGINT", () => {
+    reporter.stop();
+    if (interrupting) process.exit(130);
+    interrupting = true;
+    process.stderr.write("\n⏹  Interrupted — killing agents…\n");
+    killActiveClaudeProcesses();
+    try {
+      human.close();
+    } catch {
+      /* ignore */
+    }
+    process.exit(130);
+  });
 
   // Improvement B: --build lets the Dev team write real files into an isolated workspace.
   let workspace: string | undefined;
   if (args.build) {
     workspace = resolve(args.workspace ?? "helm-workspace");
-    if (workspace === process.cwd()) {
-      process.stderr.write("Refusing to --build inside the Helm repo. Pass --workspace <dir>.\n");
+    if (isInsideHelm(workspace)) {
+      process.stderr.write(
+        "Refusing to --build into the Helm install directory (it would clobber Helm's own source). Pass --workspace <dir> outside it.\n",
+      );
       process.exitCode = 1;
       return;
     }
@@ -131,12 +216,19 @@ const main = async (): Promise<void> => {
       runner,
       human,
       teams,
+      report: reporter.report,
       ...(args.build && workspace ? { devWritesFiles: true, workspace } : {}),
     });
 
     process.stdout.write(`\nHelm run ${result.runId} → ${result.status.toUpperCase()}\n`);
     process.stdout.write(`Spec: ${result.spec.body.requirements.length} requirements\n`);
     process.stdout.write(`Tasks: ${result.tasks.length}\n`);
+    if (result.workflow && result.workflow.body.steps.length > 0) {
+      process.stdout.write("Workflow:\n");
+      result.workflow.body.steps.forEach((step, i) =>
+        process.stdout.write(`  ${i + 1}. ${step}\n`),
+      );
+    }
     if (result.triage.length > 0) {
       const byRigor = result.triage.reduce<Record<string, number>>((m, t) => {
         m[t.rigor] = (m[t.rigor] ?? 0) + 1;
@@ -164,6 +256,7 @@ const main = async (): Promise<void> => {
 
     process.stdout.write(`\nArtifacts: ${result.storeDir}\n`);
   } finally {
+    reporter.stop();
     human.close();
   }
 };
