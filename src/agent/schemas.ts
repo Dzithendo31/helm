@@ -18,7 +18,16 @@ export const SPEC_SCHEMA = `{
 
 export const RESEARCH_SCHEMA = `{ "findings": string }`;
 
-export const WORKFLOW_SCHEMA = `{ "steps": [string], "rationale": string }`;
+export const WORKFLOW_SCHEMA = `{
+  "steps": [string],        // high-level plan, for the human
+  "rationale": string,
+  "execution": [
+    { "req": "REQ-1", "dependsOn": ["REQ-2"] }
+    // dependsOn = requirements that must finish first; list each requirement once.
+    // Independent requirements (no dependsOn) run in PARALLEL — prefer parallelism
+    // and only add a dependency when one requirement genuinely needs another's output.
+  ]
+}`;
 
 export const TASK_SCHEMA = `{
   "title": string,

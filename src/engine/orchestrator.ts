@@ -53,6 +53,7 @@ import type { TeamConfig, Teams } from "../teams/types";
 import type { HelmConfig } from "../config";
 import type { HumanInterface } from "./checkpoints";
 import { noopReporter, type Reporter } from "./events";
+import { buildWaves } from "./scheduler";
 import { persistRun } from "./store";
 
 /** Estimated tokens a single QA review pass would cost — for optimise-mode counterfactuals. */
@@ -175,11 +176,21 @@ const parseDriftVerdict = (
 
 const parseWorkflow = (data: unknown): WorkflowBody => {
   const d = (data ?? {}) as Record<string, unknown>;
+  const execRaw = Array.isArray(d.execution) ? d.execution : Array.isArray(d.order) ? d.order : [];
+  const execution = execRaw.flatMap((raw) => {
+    const e = (raw ?? {}) as Record<string, unknown>;
+    if (typeof e.req !== "string") return [];
+    const dependsOn = Array.isArray(e.dependsOn)
+      ? e.dependsOn.filter((x): x is string => typeof x === "string")
+      : [];
+    return [{ req: e.req, dependsOn }];
+  });
   return {
     steps: Array.isArray(d.steps)
       ? d.steps.filter((s): s is string => typeof s === "string")
       : ["dev", "quality", "watchmen"],
     rationale: typeof d.rationale === "string" ? d.rationale : "",
+    ...(execution.length > 0 ? { execution } : {}),
   };
 };
 
@@ -369,188 +380,237 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
   }
   report({ kind: "info", icon: "⚖", label: `Triaging ${requirements.length} requirements by risk` });
 
-  // ── 3. Per-requirement: triage → research? → Dev → gate (REQ-5, REQ-7, REQ-8) ─
-  const tasks: Artifact<TaskBody>[] = [];
-  const triageDecisions: TriageDecision[] = [];
-  let escalated = false;
+  // ── 3. Per-requirement work, run by the workflow's dependency graph (REQ-4 / E) ─
   let workspaceSnapshot = devCwd ? listWorkspaceFiles(devCwd) : new Set<string>();
   const total = requirements.length;
-
-  for (const [reqIndex, req] of requirements.entries()) {
-   const pos = `[${reqIndex + 1}/${total}]`;
-   try {
-    const hint = triageById.get(req.id) ?? { risk: "medium" as Risk, confidence: "medium" as Confidence };
-    const rigor = triage(hint);
-    const researched = needsResearch(rigor);
-    let researchFindings = "";
+  const reqByIndex = new Map(
+    requirements.map((r, i) => [r.id, { req: r, index: i }] as const),
+  );
+  const waves = buildWaves(
+    requirements.map((r) => r.id),
+    workflowBody.execution ?? [],
+  );
+  // Build mode shares one workspace, so it stays sequential (no file races);
+  // reasoning mode runs independent requirements in parallel.
+  const concurrency = devWrites ? 1 : 4;
+  const useSpinner = concurrency === 1;
+  const begin = (icon: string, label: string): void =>
+    report(useSpinner ? { kind: "begin", icon, label } : { kind: "info", icon, label: `${label} …` });
+  const finish = (icon: string, label: string, status: "ok" | "warn" | "error"): void =>
+    report(
+      useSpinner
+        ? { kind: "end", icon, label, status }
+        : { kind: "info", icon: status === "ok" ? "✓" : status === "warn" ? "⚠" : "✗", label },
+    );
+  if (waves.some((w) => w.length > 1)) {
     report({
       kind: "info",
-      icon: "⚖",
-      label: `${pos} ${req.id} · ${hint.risk} risk / ${hint.confidence} confidence → ${rigor}`,
+      icon: "🗂",
+      label: `Execution: ${waves.map((w) => (w.length > 1 ? `(${w.join(" ∥ ")})` : w[0])).join(" → ")}`,
     });
+  }
 
-    if (researched) {
-      report({ kind: "begin", icon: "🔬", label: `${pos} Research · de-risking ${req.id}` });
-      const research = await runner.run<{ findings?: unknown }>({
-        team: teams.Research.name,
-        model: teams.Research.model,
-        role: teams.Research.role,
-        mode: "produce",
-        instruction: withSchema(
-          `Research what is needed to de-risk ${req.id}: ${req.statement}.`,
-          RESEARCH_SCHEMA,
-        ),
-        payload: { refs: [req.id], statement: req.statement, acceptance: req.acceptance },
-      });
-      ledger = record(ledger, led(teams.Research, req.id, research.usage, rigor));
-      if (typeof research.data?.findings === "string") researchFindings = research.data.findings;
-      report({ kind: "end", icon: "🔬", label: `${pos} Research · ${req.id}`, status: "ok" });
-    }
+  interface ReqResult {
+    readonly index: number;
+    readonly task: Artifact<TaskBody>;
+    readonly decision: TriageDecision;
+    readonly reviews: readonly ReviewBody[];
+    readonly ledgerEntries: readonly LedgerEntry[];
+    readonly escalated: boolean;
+  }
 
-    // Research de-risks: record the raised confidence and the rationale.
-    const finalConfidence: Confidence = researched ? raiseConfidence(hint.confidence) : hint.confidence;
-    triageDecisions.push({
-      req: req.id,
-      risk: hint.risk,
-      confidence: finalConfidence,
-      rigor,
-      researched,
-      ...(hint.rationale ? { rationale: hint.rationale } : {}),
-    });
-
-    report({ kind: "info", icon: "📋", label: `${pos} Task created · ${req.id} → Dev team` });
-    report({ kind: "begin", icon: "🔨", label: `${pos} Dev · implementing ${req.id}` });
-    const existingFiles = devCwd ? [...workspaceSnapshot].sort() : [];
-    const devInstruction = devWrites
-      ? [
-          `Implement ONLY requirement ${req.id}: ${req.statement}.`,
-          `Honor the original request's language and stack exactly: "${input.request}".`,
-          `Reuse and extend the files that already exist (see existingFiles in context) — do NOT recreate them.`,
-          `Do NOT add package.json, build or test config, README, or any other scaffolding or docs unless a requirement explicitly asks for it.`,
-          `Write the minimum files needed for this one requirement, then report the relative paths you created or modified.`,
-        ].join(" ")
-      : `Implement ${req.id}: ${req.statement}`;
-    const prod = await runner.run<Partial<TaskBody>>({
-      team: teams.Dev.name,
-      model: teams.Dev.model,
-      role: teams.Dev.role,
-      mode: "produce",
-      instruction: withSchema(devInstruction, TASK_SCHEMA),
-      payload: devWrites
-        ? {
-            refs: [req.id],
-            request: input.request,
-            requirement: { id: req.id, statement: req.statement, acceptance: req.acceptance },
-            allRequirements: requirements.map((r) => ({ id: r.id, statement: r.statement })),
-            existingFiles,
-            ...(researchFindings ? { research: researchFindings } : {}),
-          }
-        : { refs: [req.id], ...(researchFindings ? { research: researchFindings } : {}) },
-      ...(devTools ? { tools: devTools } : {}),
-      ...(devCwd ? { cwd: devCwd } : {}),
-    });
-    ledger = record(ledger, led(teams.Dev, req.id, prod.usage, rigor));
-    report({ kind: "end", icon: "🔨", label: `${pos} Dev · ${req.id}`, status: "ok" });
-
-    const body: TaskBody = {
-      title: typeof prod.data?.title === "string" ? prod.data.title : `Work for ${req.id}`,
-      summary: typeof prod.data?.summary === "string" ? prod.data.summary : req.statement,
-      refs: [req.id],
-      // Files are never taken from the agent's claim — only from disk reconciliation
-      // (build mode, below). Reasoning-only runs write nothing, so this stays empty.
-      files: [],
-      tested: typeof prod.data?.tested === "boolean" ? prod.data.tested : devWrites ? false : true,
-      reviewed: false,
-    };
-    const draft = createArtifact<TaskBody>({
-      type: "Task",
-      body,
-      refs: [req.id],
-      provenance: { team: "Dev", agent: "producer", reason: "draft task" },
-    });
-
-    const critic: TeamConfig | null =
-      config.teamMode && needsTeamReview(rigor) ? teams.Quality : null;
-
-    if (critic) report({ kind: "begin", icon: "🔎", label: `${pos} Quality · reviewing ${req.id}` });
-    const gate = await runGate({
-      artifact: draft,
-      producer: teams.Dev,
-      critic,
-      runner,
-      ledger,
-      rigor,
-      ...(devTools ? { producerTools: devTools } : {}),
-      ...(devCwd ? { producerCwd: devCwd } : {}),
-    });
-    if (critic) {
+  const processRequirement = async (reqId: string): Promise<ReqResult> => {
+    const entry = reqByIndex.get(reqId);
+    if (!entry) throw new Error(`unknown requirement ${reqId}`);
+    const { req, index } = entry;
+    const pos = `[${index + 1}/${total}]`;
+    const local: LedgerEntry[] = [];
+    try {
+      const hint = triageById.get(req.id) ?? { risk: "medium" as Risk, confidence: "medium" as Confidence };
+      const rigor = triage(hint);
+      const researched = needsResearch(rigor);
+      let researchFindings = "";
       report({
-        kind: "end",
-        icon: "🔎",
-        label: `${pos} Quality · ${req.id} (${gate.cycles} cycle${gate.cycles === 1 ? "" : "s"})`,
+        kind: "info",
+        icon: "⚖",
+        label: `${pos} ${req.id} · ${hint.risk} risk / ${hint.confidence} confidence → ${rigor}`,
+      });
+
+      if (researched) {
+        begin("🔬", `${pos} Research · de-risking ${req.id}`);
+        const research = await runner.run<{ findings?: unknown }>({
+          team: teams.Research.name,
+          model: teams.Research.model,
+          role: teams.Research.role,
+          mode: "produce",
+          instruction: withSchema(
+            `Research what is needed to de-risk ${req.id}: ${req.statement}.`,
+            RESEARCH_SCHEMA,
+          ),
+          payload: { refs: [req.id], statement: req.statement, acceptance: req.acceptance },
+        });
+        local.push(led(teams.Research, req.id, research.usage, rigor));
+        if (typeof research.data?.findings === "string") researchFindings = research.data.findings;
+        finish("🔬", `${pos} Research · ${req.id}`, "ok");
+      }
+
+      // Research de-risks: record the raised confidence and the rationale.
+      const finalConfidence: Confidence = researched ? raiseConfidence(hint.confidence) : hint.confidence;
+      const decision: TriageDecision = {
+        req: req.id,
+        risk: hint.risk,
+        confidence: finalConfidence,
+        rigor,
+        researched,
+        ...(hint.rationale ? { rationale: hint.rationale } : {}),
+      };
+
+      report({ kind: "info", icon: "📋", label: `${pos} Task created · ${req.id} → Dev team` });
+      begin("🔨", `${pos} Dev · implementing ${req.id}`);
+      const existingFiles = devCwd ? [...workspaceSnapshot].sort() : [];
+      const devInstruction = devWrites
+        ? [
+            `Implement ONLY requirement ${req.id}: ${req.statement}.`,
+            `Honor the original request's language and stack exactly: "${input.request}".`,
+            `Reuse and extend the files that already exist (see existingFiles in context) — do NOT recreate them.`,
+            `Do NOT add package.json, build or test config, README, or any other scaffolding or docs unless a requirement explicitly asks for it.`,
+            `Write the minimum files needed for this one requirement, then report the relative paths you created or modified.`,
+          ].join(" ")
+        : `Implement ${req.id}: ${req.statement}`;
+      const prod = await runner.run<Partial<TaskBody>>({
+        team: teams.Dev.name,
+        model: teams.Dev.model,
+        role: teams.Dev.role,
+        mode: "produce",
+        instruction: withSchema(devInstruction, TASK_SCHEMA),
+        payload: devWrites
+          ? {
+              refs: [req.id],
+              request: input.request,
+              requirement: { id: req.id, statement: req.statement, acceptance: req.acceptance },
+              allRequirements: requirements.map((r) => ({ id: r.id, statement: r.statement })),
+              existingFiles,
+              ...(researchFindings ? { research: researchFindings } : {}),
+            }
+          : { refs: [req.id], ...(researchFindings ? { research: researchFindings } : {}) },
+        ...(devTools ? { tools: devTools } : {}),
+        ...(devCwd ? { cwd: devCwd } : {}),
+      });
+      local.push(led(teams.Dev, req.id, prod.usage, rigor));
+      finish("🔨", `${pos} Dev · ${req.id}`, "ok");
+
+      const body: TaskBody = {
+        title: typeof prod.data?.title === "string" ? prod.data.title : `Work for ${req.id}`,
+        summary: typeof prod.data?.summary === "string" ? prod.data.summary : req.statement,
+        refs: [req.id],
+        files: [],
+        tested: typeof prod.data?.tested === "boolean" ? prod.data.tested : devWrites ? false : true,
+        reviewed: false,
+      };
+      const draft = createArtifact<TaskBody>({
+        type: "Task",
+        body,
+        refs: [req.id],
+        provenance: { team: "Dev", agent: "producer", reason: "draft task" },
+      });
+
+      const critic: TeamConfig | null =
+        config.teamMode && needsTeamReview(rigor) ? teams.Quality : null;
+      if (critic) begin("🔎", `${pos} Quality · reviewing ${req.id}`);
+      const gate = await runGate({
+        artifact: draft,
+        producer: teams.Dev,
+        critic,
+        runner,
+        ledger: emptyLedger(),
+        rigor,
+        ...(devTools ? { producerTools: devTools } : {}),
+        ...(devCwd ? { producerCwd: devCwd } : {}),
+      });
+      if (critic) {
+        finish(
+          "🔎",
+          `${pos} Quality · ${req.id} (${gate.cycles} cycle${gate.cycles === 1 ? "" : "s"})`,
+          gate.escalated ? "warn" : "ok",
+        );
+      }
+      local.push(...gate.ledger.entries);
+
+      // Ground Dev's reported files in reality (build mode is sequential, so this is safe).
+      let finalTask = gate.artifact;
+      if (devWrites && devCwd) {
+        const now = listWorkspaceFiles(devCwd);
+        const actualFiles = [...now].filter((f) => !workspaceSnapshot.has(f)).sort();
+        workspaceSnapshot = now;
+        finalTask = reviseArtifact(
+          finalTask,
+          { body: { ...finalTask.body, files: actualFiles } },
+          { team: "Dev", agent: "verifier", reason: "reconcile claimed files against workspace" },
+        );
+      }
+      const fileCount = finalTask.body.files.length;
+      report({
+        kind: "info",
+        icon: gate.escalated ? "⚠" : "✓",
+        label: `${pos} ${req.id} ${gate.escalated ? "escalated to human" : "done"}${fileCount ? ` · ${fileCount} file${fileCount === 1 ? "" : "s"}` : ""}`,
         status: gate.escalated ? "warn" : "ok",
       });
-    }
-    ledger = gate.ledger;
-    reviews.push(...gate.reviews);
 
-    // Ground Dev's reported files in reality: use what actually appeared on disk,
-    // not what the agent claimed it wrote.
-    let finalTask = gate.artifact;
-    if (devWrites && devCwd) {
-      const now = listWorkspaceFiles(devCwd);
-      const actualFiles = [...now].filter((f) => !workspaceSnapshot.has(f)).sort();
-      workspaceSnapshot = now;
-      finalTask = reviseArtifact(
-        finalTask,
-        { body: { ...finalTask.body, files: actualFiles } },
-        { team: "Dev", agent: "verifier", reason: "reconcile claimed files against workspace" },
-      );
-    }
-    tasks.push(finalTask);
-    if (gate.escalated) escalated = true;
-    const fileCount = finalTask.body.files.length;
-    report({
-      kind: "info",
-      icon: gate.escalated ? "⚠" : "✓",
-      label: `${pos} ${req.id} ${gate.escalated ? "escalated to human" : "done"}${fileCount ? ` · ${fileCount} file${fileCount === 1 ? "" : "s"}` : ""}`,
-      status: gate.escalated ? "warn" : "ok",
-    });
+      if (critic === null) {
+        const reason = config.teamMode
+          ? `triage skipped QA on ${req.id} (rigor: ${rigor})`
+          : `team-mode off: skipped QA on ${req.id}`;
+        local.push({
+          team: teams.Quality.name,
+          artifact: req.id,
+          model: teams.Quality.model,
+          inputTokens: 0,
+          outputTokens: 0,
+          rigor,
+          potentialSavings: { tokens: AVOIDED_REVIEW_TOKENS, reason },
+        });
+      }
 
-    if (critic === null) {
-      // optimise-mode: record the QA review triage let us avoid.
-      const reason = config.teamMode
-        ? `triage skipped QA on ${req.id} (rigor: ${rigor})`
-        : `team-mode off: skipped QA on ${req.id}`;
-      ledger = record(ledger, {
-        team: teams.Quality.name,
-        artifact: req.id,
-        model: teams.Quality.model,
-        inputTokens: 0,
-        outputTokens: 0,
-        rigor,
-        potentialSavings: { tokens: AVOIDED_REVIEW_TOKENS, reason },
-      });
-    }
-   } catch (err) {
-      // Resilience: one agent failure (timeout, parse error, non-zero exit)
-      // degrades this requirement to NeedsHuman instead of crashing the run.
+      return { index, task: finalTask, decision, reviews: [...gate.reviews], ledgerEntries: local, escalated: gate.escalated };
+    } catch (err) {
+      // Resilience: one agent failure degrades this requirement to NeedsHuman.
       const message = err instanceof Error ? err.message : String(err);
-      tasks.push(
-        transition(
-          createArtifact<TaskBody>({
-            type: "Task",
-            body: { title: `Failed: ${req.id}`, summary: message, refs: [req.id], files: [], tested: false, reviewed: false },
-            refs: [req.id],
-            provenance: { team: "Dev", agent: "producer", reason: "agent call failed" },
-          }),
-          "NeedsHuman",
-          { team: "Dev", agent: "producer", reason: message },
-        ),
+      const failed = transition(
+        createArtifact<TaskBody>({
+          type: "Task",
+          body: { title: `Failed: ${req.id}`, summary: message, refs: [req.id], files: [], tested: false, reviewed: false },
+          refs: [req.id],
+          provenance: { team: "Dev", agent: "producer", reason: "agent call failed" },
+        }),
+        "NeedsHuman",
+        { team: "Dev", agent: "producer", reason: message },
       );
-      escalated = true;
-      report({ kind: "end", icon: "⚠", label: `${pos} ${req.id} failed: ${message.slice(0, 80)}`, status: "error" });
+      report({ kind: useSpinner ? "end" : "info", icon: "⚠", label: `${pos} ${req.id} failed: ${message.slice(0, 80)}`, status: "error" });
+      const decision: TriageDecision = { req: req.id, risk: "medium", confidence: "medium", rigor: "self-review", researched: false };
+      return { index, task: failed, decision, reviews: [], ledgerEntries: local, escalated: true };
     }
+  };
+
+  // Run each dependency wave; requirements within a wave run up to `concurrency` at a time.
+  const results: ReqResult[] = [];
+  for (const wave of waves) {
+    if (wave.length > 1) {
+      report({ kind: "info", icon: "▶", label: `Running ${wave.length} requirements in parallel: ${wave.join(", ")}` });
+    }
+    for (let i = 0; i < wave.length; i += concurrency) {
+      const chunk = wave.slice(i, i + concurrency);
+      results.push(...(await Promise.all(chunk.map(processRequirement))));
+    }
+  }
+  results.sort((a, b) => a.index - b.index);
+
+  const tasks = results.map((r) => r.task);
+  const triageDecisions = results.map((r) => r.decision);
+  let escalated = false;
+  for (const r of results) {
+    reviews.push(...r.reviews);
+    for (const e of r.ledgerEntries) ledger = record(ledger, e);
+    if (r.escalated) escalated = true;
   }
 
   // ── 4. Watchmen: reasoning-only spec-drift check (REQ-10) ──────────────────

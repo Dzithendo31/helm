@@ -203,6 +203,62 @@ describe("orchestrator", () => {
     expect(result.spec.body.requirements[0]?.acceptance).toEqual(["handles unicode"]);
   });
 
+  // A runner that tracks how many Dev calls are in flight at once.
+  class ConcurrencyRunner implements AgentRunner {
+    private readonly base: MockAgentRunner;
+    active = 0;
+    maxActive = 0;
+    constructor(options: ConstructorParameters<typeof MockAgentRunner>[0]) {
+      this.base = new MockAgentRunner(options);
+    }
+    async run<T>(req: AgentRequest): Promise<AgentResponse<T>> {
+      if (req.mode === "produce" && req.team === "Dev") {
+        this.active += 1;
+        this.maxActive = Math.max(this.maxActive, this.active);
+        await new Promise((r) => setTimeout(r, 5));
+        this.active -= 1;
+      }
+      return this.base.run<T>(req);
+    }
+  }
+
+  test("runs independent requirements in parallel (reasoning mode)", async () => {
+    const runner = new ConcurrencyRunner({
+      requirements: [{ statement: "A" }, { statement: "B" }, { statement: "C" }],
+    });
+    const result = await runHelm({
+      request: "x",
+      config: { ...defaultConfig(), teamMode: false },
+      runner,
+      human: new AutoApproveHuman(),
+      teams,
+      baseDir,
+    });
+
+    expect(result.status).toBe("delivered");
+    expect(result.tasks).toHaveLength(3);
+    expect(runner.maxActive).toBeGreaterThan(1); // they overlapped
+  });
+
+  test("respects workflow dependencies — a dependent requirement does not overlap its prerequisite", async () => {
+    const runner = new ConcurrencyRunner({
+      requirements: [{ statement: "A" }, { statement: "B" }],
+      workflowExecution: [{ req: "REQ-2", dependsOn: ["REQ-1"] }],
+    });
+    const result = await runHelm({
+      request: "x",
+      config: { ...defaultConfig(), teamMode: false },
+      runner,
+      human: new AutoApproveHuman(),
+      teams,
+      baseDir,
+    });
+
+    expect(result.status).toBe("delivered");
+    expect(result.tasks.map((t) => t.refs[0])).toEqual(["REQ-1", "REQ-2"]); // deterministic order preserved
+    expect(runner.maxActive).toBe(1); // REQ-2 waited for REQ-1
+  });
+
   test("build mode gives Dev tools + workspace and captures written files", async () => {
     class CapturingRunner implements AgentRunner {
       private readonly base = new MockAgentRunner({ requirements: [{ statement: "Reverse a string" }] });

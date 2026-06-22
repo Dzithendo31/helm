@@ -14,6 +14,7 @@ export interface MockOptions {
   /** Requirements the Leader "writes" in spec mode. */
   readonly requirements?: readonly MockRequirementSeed[];
   readonly workflowSteps?: readonly string[];
+  readonly workflowExecution?: readonly { readonly req: string; readonly dependsOn: readonly string[] }[];
   /** Each critique call shifts one set of findings; empty/exhausted => no blockers. */
   readonly critiqueQueue?: readonly (readonly Finding[])[];
   /** Attestation the Dev team records on produced tasks. */
@@ -79,6 +80,7 @@ export class MockAgentRunner implements AgentRunner {
         return {
           steps: this.options.workflowSteps ?? ["research", "dev", "quality", "watchmen"],
           rationale: "Sized to the request.",
+          ...(this.options.workflowExecution ? { execution: this.options.workflowExecution } : {}),
         };
       case "produce": {
         const refs = asRefs(req.payload);
