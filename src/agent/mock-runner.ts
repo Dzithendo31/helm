@@ -21,6 +21,11 @@ export interface MockOptions {
   readonly tested?: boolean;
   /** Leader's reply to a mid-run human message (steer mode). */
   readonly steer?: { readonly reply: string; readonly guidance: string };
+  /** Research team's grounded spec (spec-research mode). */
+  readonly specResearch?: {
+    readonly requirements?: readonly MockRequirementSeed[];
+    readonly confident?: boolean;
+  };
   /** Watchmen semantic verdict returned in drift mode (default: clean). */
   readonly drift?: {
     readonly requirements?: ReadonlyArray<{ id: string; satisfied: boolean; reason?: string }>;
@@ -105,6 +110,19 @@ export class MockAgentRunner implements AgentRunner {
         return this.options.drift ?? { requirements: [], extraneous: [] };
       case "steer":
         return this.options.steer ?? { reply: "Acknowledged.", guidance: "" };
+      case "spec-research":
+        return {
+          title: "Grounded Spec",
+          requirements:
+            this.options.specResearch?.requirements ??
+            this.options.requirements ??
+            ([
+              { statement: "The primary capability works end to end." },
+              { statement: "Errors are handled and surfaced clearly." },
+            ] satisfies MockRequirementSeed[]),
+          confident: this.options.specResearch?.confident ?? true,
+          notes: "Reviewed the draft.",
+        };
     }
   }
 }

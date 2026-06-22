@@ -93,6 +93,7 @@ interface ParsedArgs {
   readonly runner: RunnerKind;
   readonly bare: boolean;
   readonly build: boolean;
+  readonly groundSpec: boolean;
   readonly modelOverride?: string;
   readonly workspace?: string;
 }
@@ -106,6 +107,7 @@ const parseArgs = (argv: readonly string[]): ParsedArgs => {
   let runner: RunnerKind = "cli";
   let bare = false;
   let build = false;
+  let groundSpec = true;
   let modelOverride: string | undefined;
   let workspace: string | undefined;
 
@@ -121,6 +123,7 @@ const parseArgs = (argv: readonly string[]): ParsedArgs => {
       case "--cli": runner = "cli"; break;
       case "--bare": bare = true; break;
       case "--build": build = true; break;
+      case "--no-ground-spec": groundSpec = false; break;
       case "--model": modelOverride = argv[++i]; break;
       case "--workspace": workspace = argv[++i]; break;
       default:
@@ -134,6 +137,7 @@ const parseArgs = (argv: readonly string[]): ParsedArgs => {
     runner,
     bare,
     build,
+    groundSpec,
     ...(modelOverride ? { modelOverride } : {}),
     ...(workspace ? { workspace } : {}),
   };
@@ -233,6 +237,7 @@ const main = async (): Promise<void> => {
       teams,
       report,
       inbox,
+      groundSpec: args.groundSpec,
       ...(args.build && workspace ? { devWritesFiles: true, workspace } : {}),
     });
 

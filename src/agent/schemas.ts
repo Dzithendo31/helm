@@ -18,6 +18,21 @@ export const SPEC_SCHEMA = `{
 
 export const RESEARCH_SCHEMA = `{ "findings": string }`;
 
+export const SPEC_RESEARCH_SCHEMA = `{
+  "title": string,
+  "requirements": [
+    {
+      "statement": string,
+      "acceptance": [string],
+      "risk": "low" | "medium" | "high",
+      "confidence": "low" | "medium" | "high",
+      "rationale": string
+    }
+  ],
+  "confident": true | false,   // true only when the spec is complete, correct, and well-grounded
+  "notes": string              // what you investigated and what (if anything) remains uncertain
+}`;
+
 export const WORKFLOW_SCHEMA = `{
   "steps": [string],        // high-level plan, for the human
   "rationale": string,

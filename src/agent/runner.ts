@@ -3,7 +3,14 @@
  * so it can run fully offline (MockAgentRunner) or against the Claude Agent SDK
  * (ClaudeAgentRunner) without changing any engine logic.
  */
-export type AgentMode = "spec" | "workflow" | "produce" | "critique" | "drift" | "steer";
+export type AgentMode =
+  | "spec"
+  | "spec-research"
+  | "workflow"
+  | "produce"
+  | "critique"
+  | "drift"
+  | "steer";
 
 export interface AgentRequest {
   readonly team: string;

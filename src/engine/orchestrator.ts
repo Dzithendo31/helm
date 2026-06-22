@@ -43,6 +43,7 @@ import type { AgentRunner, AgentUsage } from "../agent/runner";
 import {
   DRIFT_SCHEMA,
   RESEARCH_SCHEMA,
+  SPEC_RESEARCH_SCHEMA,
   SPEC_SCHEMA,
   STEER_SCHEMA,
   TASK_SCHEMA,
@@ -61,8 +62,12 @@ import { persistRun } from "./store";
 /** Estimated tokens a single QA review pass would cost — for optimise-mode counterfactuals. */
 const AVOIDED_REVIEW_TOKENS = 300;
 const MAX_SPEC_REVISIONS = 1;
+/** Rounds the Research team may take to ground the spec before it must hand back. */
+const MAX_RESEARCH_ROUNDS = 2;
 /** Tools the Dev team gets when `--build` is on, so it can produce real files. */
 const DEV_TOOLS = ["Read", "Write", "Edit", "Bash"] as const;
+/** Read-only tools the Research team gets to investigate the codebase while grounding the spec. */
+const RESEARCH_READ_TOOLS = ["Read", "Grep", "Glob"] as const;
 
 export type RunStatus = "delivered" | "halted" | "needs-human";
 
@@ -82,6 +87,8 @@ export interface RunInput {
   readonly report?: Reporter;
   /** Mid-run human → orchestrator messages (drained between dependency waves). */
   readonly inbox?: Inbox;
+  /** REQ #2: hand the draft spec to Research to ground it before human approval. */
+  readonly groundSpec?: boolean;
 }
 
 export interface RunResult {
@@ -241,9 +248,46 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
   const devWrites = input.devWritesFiles === true && typeof input.workspace === "string";
   const devTools = devWrites ? DEV_TOOLS : undefined;
   const devCwd = devWrites ? input.workspace : undefined;
+  const groundSpec = input.groundSpec === true;
   const runId = newId("run");
   let ledger = emptyLedger();
   const reviews: ReviewBody[] = [];
+
+  // REQ #2: hand the draft spec to the Research team to ground it (reading code when a
+  // workspace is available) until it is confident, then return the refined requirements.
+  const groundDraftSpec = async (draft: ReqSeed[]): Promise<ReqSeed[]> => {
+    let current = draft;
+    const workspace = devWrites ? input.workspace : undefined;
+    report({ kind: "begin", icon: "🔬", label: "Research · grounding the spec" });
+    for (let round = 0; round < MAX_RESEARCH_ROUNDS; round += 1) {
+      const res = await runner.run<{ confident?: unknown }>({
+        team: teams.Research.name,
+        model: teams.Research.model,
+        role: teams.Research.role,
+        mode: "spec-research",
+        instruction: withSchema(
+          `Investigate and refine this draft spec for the request: "${input.request}". ` +
+            "Read the codebase if it is available to ground the requirements. Add anything missing, " +
+            "sharpen acceptance criteria, and correct risk/confidence. Set \"confident\" to true only " +
+            "when the spec is complete and correct.",
+          SPEC_RESEARCH_SCHEMA,
+        ),
+        payload: { request: input.request, draft: current },
+        ...(workspace ? { tools: [...RESEARCH_READ_TOOLS], cwd: workspace } : {}),
+      });
+      ledger = record(ledger, led(teams.Research, "spec", res.usage));
+      const refined = parseSeeds(res.data);
+      if (refined.length > 0) current = refined;
+      if (res.data?.confident === true) break;
+    }
+    report({
+      kind: "end",
+      icon: "🔬",
+      label: `Research · spec grounded (${current.length} requirements)`,
+      status: "ok",
+    });
+    return current;
+  };
 
   // ── 1. Leader writes the Spec, human approves (REQ-2, REQ-3) ───────────────
   let seeds: ReqSeed[] = [];
@@ -276,7 +320,10 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
       malformed = true;
       break;
     }
-    report({ kind: "end", icon: "⚓", label: `Spec · ${seeds.length} requirements`, status: "ok" });
+    report({ kind: "end", icon: "⚓", label: `Spec draft · ${seeds.length} requirements`, status: "ok" });
+    if (groundSpec && attempt === 0) {
+      seeds = await groundDraftSpec(seeds);
+    }
     const title =
       specRes.data && typeof specRes.data === "object" && typeof (specRes.data as { title?: unknown }).title === "string"
         ? (specRes.data as { title: string }).title

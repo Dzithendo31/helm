@@ -204,6 +204,72 @@ describe("orchestrator", () => {
     expect(result.spec.body.requirements[0]?.acceptance).toEqual(["handles unicode"]);
   });
 
+  test("research grounds the draft spec before approval", async () => {
+    const result = await runHelm({
+      request: "x",
+      config: { ...defaultConfig(), teamMode: false },
+      runner: new MockAgentRunner({
+        requirements: [{ statement: "draft requirement" }],
+        specResearch: { requirements: [{ statement: "grounded A" }, { statement: "grounded B" }], confident: true },
+      }),
+      human: new AutoApproveHuman(),
+      teams,
+      baseDir,
+      groundSpec: true,
+    });
+
+    expect(result.spec.body.requirements).toHaveLength(2); // refined, not the 1-req draft
+    expect(result.spec.body.requirements[0]?.statement).toBe("grounded A");
+  });
+
+  test("without grounding, the Leader's draft spec is used as-is", async () => {
+    const result = await runHelm({
+      request: "x",
+      config: { ...defaultConfig(), teamMode: false },
+      runner: new MockAgentRunner({
+        requirements: [{ statement: "draft requirement" }],
+        specResearch: { requirements: [{ statement: "grounded" }] },
+      }),
+      human: new AutoApproveHuman(),
+      teams,
+      baseDir,
+      // groundSpec omitted → off
+    });
+
+    expect(result.spec.body.requirements).toHaveLength(1);
+    expect(result.spec.body.requirements[0]?.statement).toBe("draft requirement");
+  });
+
+  test("research iterates up to the round limit when not yet confident", async () => {
+    let researchCalls = 0;
+    class CountingRunner implements AgentRunner {
+      private readonly base = new MockAgentRunner({ requirements: [{ statement: "X" }] });
+      async run<T>(req: AgentRequest): Promise<AgentResponse<T>> {
+        if (req.mode === "spec-research") {
+          researchCalls += 1;
+          return {
+            text: "",
+            data: { requirements: [{ statement: "X" }], confident: false } as T,
+            usage: { inputTokens: 1, outputTokens: 1 },
+          };
+        }
+        return this.base.run<T>(req);
+      }
+    }
+
+    await runHelm({
+      request: "x",
+      config: { ...defaultConfig(), teamMode: false },
+      runner: new CountingRunner(),
+      human: new AutoApproveHuman(),
+      teams,
+      baseDir,
+      groundSpec: true,
+    });
+
+    expect(researchCalls).toBe(2); // MAX_RESEARCH_ROUNDS, then it hands back anyway
+  });
+
   // A runner that tracks how many Dev calls are in flight at once.
   class ConcurrencyRunner implements AgentRunner {
     private readonly base: MockAgentRunner;
