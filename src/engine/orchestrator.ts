@@ -44,6 +44,7 @@ import {
   DRIFT_SCHEMA,
   RESEARCH_SCHEMA,
   SPEC_SCHEMA,
+  STEER_SCHEMA,
   TASK_SCHEMA,
   WORKFLOW_SCHEMA,
   withSchema,
@@ -53,6 +54,7 @@ import type { TeamConfig, Teams } from "../teams/types";
 import type { HelmConfig } from "../config";
 import type { HumanInterface } from "./checkpoints";
 import { noopReporter, type Reporter } from "./events";
+import { noopInbox, type Inbox } from "./inbox";
 import { buildWaves } from "./scheduler";
 import { persistRun } from "./store";
 
@@ -78,6 +80,8 @@ export interface RunInput {
   readonly workspace?: string;
   /** Live progress channel (the CLI renders a spinner + step log). */
   readonly report?: Reporter;
+  /** Mid-run human → orchestrator messages (drained between dependency waves). */
+  readonly inbox?: Inbox;
 }
 
 export interface RunResult {
@@ -231,6 +235,8 @@ const led = (
 export const runHelm = async (input: RunInput): Promise<RunResult> => {
   const { config, runner, human, teams } = input;
   const report = input.report ?? noopReporter;
+  const inbox = input.inbox ?? noopInbox;
+  const steering: string[] = []; // guidance the human injects mid-run, folded into later work
   const baseDir = input.baseDir ?? process.cwd();
   const devWrites = input.devWritesFiles === true && typeof input.workspace === "string";
   const devTools = devWrites ? DEV_TOOLS : undefined;
@@ -477,12 +483,14 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
             `Write the minimum files needed for this one requirement, then report the relative paths you created or modified.`,
           ].join(" ")
         : `Implement ${req.id}: ${req.statement}`;
+      const steered =
+        steering.length > 0 ? `${devInstruction} Mid-run human guidance: ${steering.join("; ")}.` : devInstruction;
       const prod = await runner.run<Partial<TaskBody>>({
         team: teams.Dev.name,
         model: teams.Dev.model,
         role: teams.Dev.role,
         mode: "produce",
-        instruction: withSchema(devInstruction, TASK_SCHEMA),
+        instruction: withSchema(steered, TASK_SCHEMA),
         payload: devWrites
           ? {
               refs: [req.id],
@@ -593,7 +601,39 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
 
   // Run each dependency wave; requirements within a wave run up to `concurrency` at a time.
   const results: ReqResult[] = [];
+
+  // Drain any mid-run human messages and let the Leader reply + steer the rest of the run.
+  const processMessages = async (): Promise<void> => {
+    for (const message of inbox.drain()) {
+      report({ kind: "info", icon: "💬", label: `You: ${message}` });
+      try {
+        const res = await runner.run<{ reply?: unknown; guidance?: unknown }>({
+          team: teams["Helm-Leader"].name,
+          model: teams["Helm-Leader"].model,
+          role: teams["Helm-Leader"].role,
+          mode: "steer",
+          instruction: withSchema(
+            `The human sent a message mid-run: "${message}". Reply briefly. If it should change the remaining work, give concrete guidance; otherwise leave guidance "".`,
+            STEER_SCHEMA,
+          ),
+          payload: {
+            spec: specBody.requirements.map((r) => ({ id: r.id, statement: r.statement })),
+            done: results.map((r) => r.task.refs[0]),
+          },
+        });
+        ledger = record(ledger, led(teams["Helm-Leader"], "steer", res.usage));
+        const reply = typeof res.data?.reply === "string" && res.data.reply ? res.data.reply : "(acknowledged)";
+        const guidance = typeof res.data?.guidance === "string" ? res.data.guidance.trim() : "";
+        report({ kind: "info", icon: "⚓", label: `Helm-Leader: ${reply}` });
+        if (guidance) steering.push(guidance);
+      } catch {
+        report({ kind: "info", icon: "⚠", label: "Helm-Leader could not process the message" });
+      }
+    }
+  };
+
   for (const wave of waves) {
+    await processMessages();
     if (wave.length > 1) {
       report({ kind: "info", icon: "▶", label: `Running ${wave.length} requirements in parallel: ${wave.join(", ")}` });
     }
@@ -602,6 +642,7 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
       results.push(...(await Promise.all(chunk.map(processRequirement))));
     }
   }
+  await processMessages();
   results.sort((a, b) => a.index - b.index);
 
   const tasks = results.map((r) => r.task);

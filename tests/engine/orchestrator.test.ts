@@ -6,6 +6,7 @@ import { MockAgentRunner } from "../../src/agent/mock-runner";
 import type { AgentRequest, AgentResponse, AgentRunner } from "../../src/agent/runner";
 import { defaultConfig } from "../../src/config";
 import { AutoApproveHuman, type HumanInterface, type SpecDecision } from "../../src/engine/checkpoints";
+import { QueueInbox } from "../../src/engine/inbox";
 import { runHelm } from "../../src/engine/orchestrator";
 import { buildTeams } from "../../src/teams/definitions";
 
@@ -257,6 +258,36 @@ describe("orchestrator", () => {
     expect(result.status).toBe("delivered");
     expect(result.tasks.map((t) => t.refs[0])).toEqual(["REQ-1", "REQ-2"]); // deterministic order preserved
     expect(runner.maxActive).toBe(1); // REQ-2 waited for REQ-1
+  });
+
+  test("a mid-run message is answered by the Leader and steers later Dev work", async () => {
+    const inbox = new QueueInbox();
+    inbox.push("please use strict mode");
+
+    let devInstruction = "";
+    class SteerRunner implements AgentRunner {
+      private readonly base = new MockAgentRunner({
+        requirements: [{ statement: "X" }],
+        steer: { reply: "Will do.", guidance: "use TypeScript strict mode" },
+      });
+      async run<T>(req: AgentRequest): Promise<AgentResponse<T>> {
+        if (req.mode === "produce" && req.team === "Dev") devInstruction = req.instruction;
+        return this.base.run<T>(req);
+      }
+    }
+
+    const result = await runHelm({
+      request: "x",
+      config: { ...defaultConfig(), teamMode: false },
+      runner: new SteerRunner(),
+      human: new AutoApproveHuman(),
+      teams,
+      baseDir,
+      inbox,
+    });
+
+    expect(result.status).toBe("delivered");
+    expect(devInstruction).toContain("strict mode"); // the Leader's guidance reached Dev
   });
 
   test("build mode gives Dev tools + workspace and captures written files", async () => {

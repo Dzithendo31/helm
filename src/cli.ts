@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { mkdirSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { createInterface, type Interface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { defaultConfig, type HelmConfig } from "./config";
 import { ClaudeAgentRunner } from "./agent/claude-runner";
@@ -17,6 +18,7 @@ import {
   type HumanInterface,
 } from "./engine/checkpoints";
 import { runHelm } from "./engine/orchestrator";
+import { QueueInbox } from "./engine/inbox";
 import { savingsReport } from "./core/ledger";
 
 /** The Helm install root (one level up from src/ or dist/), so roles and the
@@ -146,9 +148,9 @@ const selectRunner = (kind: RunnerKind, bare: boolean, build: boolean): AgentRun
   }
 };
 
-const selectHuman = (config: HelmConfig, kind: RunnerKind): HumanInterface => {
+const selectHuman = (config: HelmConfig, kind: RunnerKind, rl?: Interface): HumanInterface => {
   if (kind === "mock" || !process.stdin.isTTY) return new AutoApproveHuman();
-  const console_ = new ConsoleHuman();
+  const console_ = new ConsoleHuman(rl);
   return config.mode === "autonomous" ? new AutonomousHuman(console_) : console_;
 };
 
@@ -176,22 +178,35 @@ const main = async (): Promise<void> => {
   const teams = applyRolesFromDir(buildTeams(models), rolesDir);
 
   const runner = selectRunner(args.runner, args.bare, args.build);
-  const human = selectHuman(args.config, args.runner);
-  const reporter = createConsoleReporter();
+  const interactive = process.stdin.isTTY && args.runner !== "mock";
+  const rl = interactive ? createInterface({ input: process.stdin, output: process.stdout }) : undefined;
+  const human = selectHuman(args.config, args.runner, rl);
+  const baseReporter = createConsoleReporter();
+
+  // Mid-run steering: feed stdin lines to the orchestrator's inbox, but only after
+  // the spec is approved (so the approval answer isn't captured as a message).
+  const inbox = new QueueInbox();
+  let accepting = false;
+  rl?.on("line", (line) => {
+    if (accepting) inbox.push(line);
+  });
+  const report: Reporter = (event) => {
+    baseReporter.report(event);
+    if (event.kind === "info" && event.label === "Spec approved" && rl) {
+      accepting = true;
+      process.stdout.write("  💬 (type a message + Enter anytime to steer the run)\n");
+    }
+  };
 
   // Ctrl-C: stop the spinner, kill in-flight claude subprocesses, and exit.
   let interrupting = false;
   process.on("SIGINT", () => {
-    reporter.stop();
+    baseReporter.stop();
     if (interrupting) process.exit(130);
     interrupting = true;
     process.stderr.write("\n⏹  Interrupted — killing agents…\n");
     killActiveClaudeProcesses();
-    try {
-      human.close();
-    } catch {
-      /* ignore */
-    }
+    rl?.close();
     process.exit(130);
   });
 
@@ -216,7 +231,8 @@ const main = async (): Promise<void> => {
       runner,
       human,
       teams,
-      report: reporter.report,
+      report,
+      inbox,
       ...(args.build && workspace ? { devWritesFiles: true, workspace } : {}),
     });
 
@@ -256,8 +272,9 @@ const main = async (): Promise<void> => {
 
     process.stdout.write(`\nArtifacts: ${result.storeDir}\n`);
   } finally {
-    reporter.stop();
+    baseReporter.stop();
     human.close();
+    rl?.close();
   }
 };
 

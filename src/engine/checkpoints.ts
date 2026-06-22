@@ -1,4 +1,4 @@
-import { createInterface } from "node:readline/promises";
+import { createInterface, type Interface } from "node:readline/promises";
 import type { Finding } from "../core/review";
 import type { SpecBody } from "../core/spec";
 import { renderSpecMarkdown } from "../core/spec";
@@ -22,7 +22,14 @@ export interface HumanInterface {
 
 /** Console (TTY) human — used for interactive mode. */
 export class ConsoleHuman implements HumanInterface {
-  private readonly rl = createInterface({ input: process.stdin, output: process.stdout });
+  private readonly rl: Interface;
+  private readonly ownsRl: boolean;
+
+  /** Accepts a shared readline so the CLI can reuse it for mid-run input. */
+  constructor(rl?: Interface) {
+    this.rl = rl ?? createInterface({ input: process.stdin, output: process.stdout });
+    this.ownsRl = rl === undefined;
+  }
 
   async approveSpec(spec: SpecBody): Promise<SpecDecision> {
     process.stdout.write(`\n${renderSpecMarkdown(spec)}\n`);
@@ -45,7 +52,7 @@ export class ConsoleHuman implements HumanInterface {
   }
 
   close(): void {
-    this.rl.close();
+    if (this.ownsRl) this.rl.close();
   }
 }
 

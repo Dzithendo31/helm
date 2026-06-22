@@ -53,5 +53,10 @@ export const DRIFT_SCHEMA = `{
   ]
 }`;
 
+export const STEER_SCHEMA = `{
+  "reply": string,      // a short message back to the human
+  "guidance": string    // a concrete instruction to fold into the remaining work, or "" if none
+}`;
+
 export const withSchema = (instruction: string, schema: string): string =>
   `${instruction}\n\nReturn JSON exactly matching this shape (use these exact field names):\n${schema}`;

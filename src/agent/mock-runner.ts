@@ -19,6 +19,8 @@ export interface MockOptions {
   readonly critiqueQueue?: readonly (readonly Finding[])[];
   /** Attestation the Dev team records on produced tasks. */
   readonly tested?: boolean;
+  /** Leader's reply to a mid-run human message (steer mode). */
+  readonly steer?: { readonly reply: string; readonly guidance: string };
   /** Watchmen semantic verdict returned in drift mode (default: clean). */
   readonly drift?: {
     readonly requirements?: ReadonlyArray<{ id: string; satisfied: boolean; reason?: string }>;
@@ -101,6 +103,8 @@ export class MockAgentRunner implements AgentRunner {
       }
       case "drift":
         return this.options.drift ?? { requirements: [], extraneous: [] };
+      case "steer":
+        return this.options.steer ?? { reply: "Acknowledged.", guidance: "" };
     }
   }
 }
