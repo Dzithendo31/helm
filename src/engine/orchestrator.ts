@@ -65,6 +65,8 @@ const AVOIDED_REVIEW_TOKENS = 300;
 const MAX_SPEC_REVISIONS = 1;
 /** Rounds the Research team may take to ground the spec before it must hand back. */
 const MAX_RESEARCH_ROUNDS = 2;
+/** Times Dev may fix failing tests and re-verify before the run gives up. */
+const MAX_FIX_ROUNDS = 2;
 /** Tools the Dev team gets when `--build` is on, so it can produce real files. */
 const DEV_TOOLS = ["Read", "Write", "Edit", "Bash"] as const;
 /** Read-only tools the Research team gets to investigate the codebase while grounding the spec. */
@@ -706,19 +708,46 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
     if (r.escalated) escalated = true;
   }
 
-  // ── 3b. Verify: actually run the tests so `tested` is a fact, not a claim ───
+  // ── 3b. Verify (and fix): run the tests; if they fail, hand the output back to
+  //        Dev to fix and re-run, up to a bound. `tested` becomes a verified fact. ─
   let verification: VerificationResult | undefined;
   if (devWrites && devCwd) {
-    report({ kind: "begin", icon: "🧪", label: "Verifying · running the test suite" });
-    verification = await runVerification({ workspace: devCwd, command: input.testCommand ?? null });
-    report({
-      kind: "end",
-      icon: "🧪",
-      label: verification.ran
-        ? `Tests ${verification.passed ? "passed" : "failed"} — ${verification.command}`
-        : "No tests to run",
-      status: verification.passed ? "ok" : verification.ran ? "error" : "warn",
-    });
+    const runTests = async (label: string): Promise<VerificationResult> => {
+      report({ kind: "begin", icon: "🧪", label });
+      const v = await runVerification({ workspace: devCwd, command: input.testCommand ?? null });
+      report({
+        kind: "end",
+        icon: "🧪",
+        label: v.ran ? `Tests ${v.passed ? "passed" : "failed"} — ${v.command}` : "No tests to run",
+        status: v.passed ? "ok" : v.ran ? "error" : "warn",
+      });
+      return v;
+    };
+
+    verification = await runTests("Verifying · running the test suite");
+
+    for (let round = 1; verification.ran && !verification.passed && round <= MAX_FIX_ROUNDS; round += 1) {
+      report({ kind: "begin", icon: "🔧", label: `Dev · fixing failing tests (round ${round})` });
+      const fix = await runner.run({
+        team: teams.Dev.name,
+        model: teams.Dev.model,
+        role: teams.Dev.role,
+        mode: "produce",
+        instruction: withSchema(
+          `The test command "${verification.command}" failed. Fix the code and/or the tests so the ` +
+            "suite passes. Do NOT delete or weaken tests just to make them pass. Test output follows:\n" +
+            verification.output.slice(-1500),
+          TASK_SCHEMA,
+        ),
+        payload: { request: input.request, command: verification.command },
+        tools: [...DEV_TOOLS],
+        cwd: devCwd,
+      });
+      ledger = record(ledger, led(teams.Dev, "fix", fix.usage));
+      report({ kind: "end", icon: "🔧", label: `Dev · fix round ${round}`, status: "ok" });
+      verification = await runTests("Re-running the test suite");
+    }
+
     if (verification.ran) {
       for (let i = 0; i < tasks.length; i += 1) {
         tasks[i] = reviseArtifact(

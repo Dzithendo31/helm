@@ -423,6 +423,66 @@ describe("orchestrator", () => {
     expect(result.tasks.every((t) => t.body.tested === false)).toBe(true);
   });
 
+  test("test-fix loop: a failing suite is fixed by Dev and re-verified to green", async () => {
+    const ws = await mkdtemp(join(tmpdir(), "helm-fix-"));
+    const marker = join(ws, "fixed.txt");
+    class FixingRunner implements AgentRunner {
+      private readonly base = new MockAgentRunner({ requirements: [{ statement: "X" }] });
+      async run<T>(req: AgentRequest): Promise<AgentResponse<T>> {
+        // The fix call creates the marker the test command checks for.
+        if (req.mode === "produce" && req.team === "Dev" && req.instruction.includes("Fix the code")) {
+          await writeFile(marker, "ok", "utf8");
+        }
+        return this.base.run<T>(req);
+      }
+    }
+
+    const result = await runHelm({
+      request: "x",
+      config: { ...defaultConfig(), teamMode: false },
+      runner: new FixingRunner(),
+      human: new AutoApproveHuman(),
+      teams,
+      baseDir,
+      devWritesFiles: true,
+      workspace: ws,
+      testCommand: `test -f "${marker}"`, // fails until the fix creates the marker
+    });
+
+    expect(result.verification?.passed).toBe(true);
+    expect(result.tasks.every((t) => t.body.tested)).toBe(true);
+    await rm(ws, { recursive: true, force: true });
+  });
+
+  test("test-fix loop gives up after the round limit", async () => {
+    let fixAttempts = 0;
+    class NeverFixRunner implements AgentRunner {
+      private readonly base = new MockAgentRunner({ requirements: [{ statement: "X" }] });
+      async run<T>(req: AgentRequest): Promise<AgentResponse<T>> {
+        if (req.mode === "produce" && req.team === "Dev" && req.instruction.includes("Fix the code")) {
+          fixAttempts += 1;
+        }
+        return this.base.run<T>(req);
+      }
+    }
+
+    const result = await runHelm({
+      request: "x",
+      config: { ...defaultConfig(), teamMode: false },
+      runner: new NeverFixRunner(),
+      human: new AutoApproveHuman(),
+      teams,
+      baseDir,
+      devWritesFiles: true,
+      workspace: baseDir,
+      testCommand: "exit 1", // never passes
+    });
+
+    expect(result.verification?.passed).toBe(false);
+    expect(result.tasks.every((t) => t.body.tested === false)).toBe(true);
+    expect(fixAttempts).toBe(2); // MAX_FIX_ROUNDS
+  });
+
   test("reconciles Dev's claimed files against what actually landed on disk", async () => {
     // Dev claims a file it didn't write, and writes a different one for real.
     class WritingRunner implements AgentRunner {
