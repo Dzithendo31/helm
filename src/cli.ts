@@ -96,6 +96,7 @@ interface ParsedArgs {
   readonly groundSpec: boolean;
   readonly modelOverride?: string;
   readonly workspace?: string;
+  readonly testCommand?: string;
 }
 
 const parseArgs = (argv: readonly string[]): ParsedArgs => {
@@ -110,6 +111,7 @@ const parseArgs = (argv: readonly string[]): ParsedArgs => {
   let groundSpec = true;
   let modelOverride: string | undefined;
   let workspace: string | undefined;
+  let testCommand: string | undefined;
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -126,6 +128,7 @@ const parseArgs = (argv: readonly string[]): ParsedArgs => {
       case "--no-ground-spec": groundSpec = false; break;
       case "--model": modelOverride = argv[++i]; break;
       case "--workspace": workspace = argv[++i]; break;
+      case "--test-cmd": testCommand = argv[++i]; break;
       default:
         if (!arg.startsWith("--")) positionals.push(arg);
     }
@@ -140,6 +143,7 @@ const parseArgs = (argv: readonly string[]): ParsedArgs => {
     groundSpec,
     ...(modelOverride ? { modelOverride } : {}),
     ...(workspace ? { workspace } : {}),
+    ...(testCommand ? { testCommand } : {}),
   };
 };
 
@@ -238,6 +242,7 @@ const main = async (): Promise<void> => {
       report,
       inbox,
       groundSpec: args.groundSpec,
+      ...(args.testCommand ? { testCommand: args.testCommand } : {}),
       ...(args.build && workspace ? { devWritesFiles: true, workspace } : {}),
     });
 
@@ -263,6 +268,12 @@ const main = async (): Promise<void> => {
     if (files.length > 0) {
       process.stdout.write(`Files written (${files.length}):\n`);
       for (const file of files) process.stdout.write(`  + ${file}\n`);
+    }
+    if (result.verification) {
+      const v = result.verification;
+      process.stdout.write(
+        v.ran ? `Tests: ${v.passed ? "PASSED" : "FAILED"} (${v.command})\n` : "Tests: none found\n",
+      );
     }
     if (result.drift) process.stdout.write("⚠ Watchmen halted on spec drift.\n");
     if (result.gaps) process.stdout.write("⚠ Coverage gaps (partial) present.\n");

@@ -388,6 +388,41 @@ describe("orchestrator", () => {
     expect(result.tasks[0]?.body.files).toEqual([]);
   });
 
+  test("real verification: a passing test command makes tested a verified fact", async () => {
+    const result = await runHelm({
+      request: "x",
+      config: { ...defaultConfig(), teamMode: false },
+      runner: new MockAgentRunner({ requirements: [{ statement: "X" }] }),
+      human: new AutoApproveHuman(),
+      teams,
+      baseDir,
+      devWritesFiles: true,
+      workspace: baseDir,
+      testCommand: "exit 0", // runs for real, exits 0
+    });
+
+    expect(result.verification?.ran).toBe(true);
+    expect(result.verification?.passed).toBe(true);
+    expect(result.tasks.every((t) => t.body.tested)).toBe(true);
+  });
+
+  test("real verification: a failing test command marks the work untested", async () => {
+    const result = await runHelm({
+      request: "x",
+      config: { ...defaultConfig(), teamMode: false },
+      runner: new MockAgentRunner({ requirements: [{ statement: "X" }] }),
+      human: new AutoApproveHuman(),
+      teams,
+      baseDir,
+      devWritesFiles: true,
+      workspace: baseDir,
+      testCommand: "exit 1", // runs for real, exits 1
+    });
+
+    expect(result.verification?.passed).toBe(false);
+    expect(result.tasks.every((t) => t.body.tested === false)).toBe(true);
+  });
+
   test("reconciles Dev's claimed files against what actually landed on disk", async () => {
     // Dev claims a file it didn't write, and writes a different one for real.
     class WritingRunner implements AgentRunner {

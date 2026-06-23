@@ -8,6 +8,7 @@ import { renderSpecMarkdown } from "../core/spec";
 import type { TaskBody } from "../core/task";
 import { renderMatrixMarkdown, type TraceMatrix } from "../core/traceability";
 import { renderTriageMarkdown, type TriageDecision } from "../core/triage";
+import type { VerificationResult } from "./verify";
 import type { WorkflowBody } from "../core/workflow";
 
 /** REQ-15: a run persists to an inspectable, resumable `.helm/<runId>/` store. */
@@ -19,6 +20,7 @@ export interface RunStoreData {
   readonly matrix: TraceMatrix;
   readonly ledger: Ledger;
   readonly triage?: readonly TriageDecision[];
+  readonly verification?: VerificationResult;
   /** Raw model output captured when a run fails loud (e.g. unparseable spec). */
   readonly rawSpec?: string;
 }
@@ -53,6 +55,13 @@ export const persistRun = async (
   await writeFile(join(dir, "ledger.json"), JSON.stringify(data.ledger, null, 2), "utf8");
   if (data.triage && data.triage.length > 0) {
     await writeFile(join(dir, "triage.md"), renderTriageMarkdown(data.triage), "utf8");
+  }
+  if (data.verification) {
+    const v = data.verification;
+    const md = v.ran
+      ? `# Verification\n\nCommand: \`${v.command}\`\nResult: ${v.passed ? "PASSED" : "FAILED"} (exit ${v.exitCode})\n\n\`\`\`\n${v.output}\n\`\`\`\n`
+      : "# Verification\n\nNo test command found — `tested` could not be verified.\n";
+    await writeFile(join(dir, "verification.md"), md, "utf8");
   }
   if (data.rawSpec !== undefined) {
     await writeFile(join(dir, "spec.raw.txt"), data.rawSpec, "utf8");

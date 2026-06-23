@@ -58,6 +58,7 @@ import { noopReporter, type Reporter } from "./events";
 import { noopInbox, type Inbox } from "./inbox";
 import { buildWaves } from "./scheduler";
 import { persistRun } from "./store";
+import { runVerification, type VerificationResult } from "./verify";
 
 /** Estimated tokens a single QA review pass would cost — for optimise-mode counterfactuals. */
 const AVOIDED_REVIEW_TOKENS = 300;
@@ -89,6 +90,8 @@ export interface RunInput {
   readonly inbox?: Inbox;
   /** REQ #2: hand the draft spec to Research to ground it before human approval. */
   readonly groundSpec?: boolean;
+  /** Test command run in the workspace to verify `tested` (build mode). Auto-detected if omitted. */
+  readonly testCommand?: string;
 }
 
 export interface RunResult {
@@ -100,6 +103,7 @@ export interface RunResult {
   readonly reviews: readonly ReviewBody[];
   readonly matrix: TraceMatrix;
   readonly triage: readonly TriageDecision[];
+  readonly verification?: VerificationResult;
   readonly drift: boolean;
   readonly gaps: boolean;
   readonly ledger: Ledger;
@@ -528,6 +532,7 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
             `Reuse and extend the files that already exist (see existingFiles in context) — do NOT recreate them.`,
             `Do NOT add package.json, build or test config, README, or any other scaffolding or docs unless a requirement explicitly asks for it.`,
             `Write the minimum files needed for this one requirement, then report the relative paths you created or modified.`,
+            `If the requirement's acceptance criteria describe testable behavior, also write a runnable test file covering them.`,
           ].join(" ")
         : `Implement ${req.id}: ${req.statement}`;
       const steered =
@@ -701,6 +706,34 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
     if (r.escalated) escalated = true;
   }
 
+  // ── 3b. Verify: actually run the tests so `tested` is a fact, not a claim ───
+  let verification: VerificationResult | undefined;
+  if (devWrites && devCwd) {
+    report({ kind: "begin", icon: "🧪", label: "Verifying · running the test suite" });
+    verification = await runVerification({ workspace: devCwd, command: input.testCommand ?? null });
+    report({
+      kind: "end",
+      icon: "🧪",
+      label: verification.ran
+        ? `Tests ${verification.passed ? "passed" : "failed"} — ${verification.command}`
+        : "No tests to run",
+      status: verification.passed ? "ok" : verification.ran ? "error" : "warn",
+    });
+    if (verification.ran) {
+      for (let i = 0; i < tasks.length; i += 1) {
+        tasks[i] = reviseArtifact(
+          tasks[i],
+          { body: { ...tasks[i].body, tested: verification.passed } },
+          {
+            team: "Dev",
+            agent: "verifier",
+            reason: `tests ${verification.passed ? "passed" : "failed"} (exit ${verification.exitCode})`,
+          },
+        );
+      }
+    }
+  }
+
   // ── 4. Watchmen: reasoning-only spec-drift check (REQ-10) ──────────────────
   // Structural matrix first, then fold in the Watchmen's semantic judgment.
   report({ kind: "begin", icon: "👁", label: "Watchmen · checking for spec drift" });
@@ -727,6 +760,16 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
           summary: t.body.summary,
           files: t.body.files,
         })),
+        ...(verification
+          ? {
+              tests: {
+                ran: verification.ran,
+                passed: verification.passed,
+                command: verification.command,
+                output: verification.output.slice(-600),
+              },
+            }
+          : {}),
       },
     });
     ledger = record(ledger, led(teams.Watchmen, "drift", watch.usage));
@@ -760,6 +803,7 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
     matrix,
     ledger,
     triage: triageDecisions,
+    ...(verification ? { verification } : {}),
   });
 
   return {
@@ -771,6 +815,7 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
     reviews,
     matrix,
     triage: triageDecisions,
+    ...(verification ? { verification } : {}),
     drift,
     gaps,
     ledger,
