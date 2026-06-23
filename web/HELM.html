@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>HELM — Agent Orchestration IDE</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&family=DM+Mono:wght@400;500&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="helm.css" />
+</head>
+<body>
+<div id="root"></div>
+
+<template id="__bundler_thumbnail" data-bg-color="#080A0E">
+  <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+    <rect width="1200" height="800" fill="#080A0E"/>
+    <g fill="none" stroke="#F5A623" stroke-width="14" stroke-linecap="round">
+      <circle cx="600" cy="400" r="70"/>
+      <circle cx="600" cy="400" r="170"/>
+      <line x1="600" y1="160" x2="600" y2="250"/>
+      <line x1="600" y1="550" x2="600" y2="640"/>
+      <line x1="360" y1="400" x2="450" y2="400"/>
+      <line x1="750" y1="400" x2="840" y2="400"/>
+      <line x1="430" y1="230" x2="495" y2="295"/>
+      <line x1="705" y1="505" x2="770" y2="570"/>
+      <line x1="770" y1="230" x2="705" y2="295"/>
+      <line x1="495" y1="505" x2="430" y2="570"/>
+    </g>
+    <text x="600" y="730" fill="#F5A623" font-family="monospace" font-size="58" font-weight="700" letter-spacing="14" text-anchor="middle">HELM</text>
+  </svg>
+</template>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+
+<script type="text/babel" src="js/data.jsx"></script>
+<script type="text/babel" src="js/icons.jsx"></script>
+<script type="text/babel" src="js/nodes.jsx"></script>
+<script type="text/babel" src="js/canvas.jsx"></script>
+<script type="text/babel" src="js/docks.jsx"></script>
+<script type="text/babel" src="js/inspector.jsx"></script>
+<script type="text/babel" src="js/chat.jsx"></script>
+<script type="text/babel" src="js/console.jsx"></script>
+<script type="text/babel" src="js/overlays.jsx"></script>
+<script type="text/babel" src="js/brainview.jsx"></script>
+<script type="text/babel" src="js/app.jsx"></script>
+</body>
+</html>
