@@ -4,6 +4,15 @@
 const { useState: auseState, useEffect: auseEffect, useRef: auseRef, useCallback: auseCb } = React;
 const ap = React.createElement;
 
+// LIVE mode (open HELM.html?live): silence the design sim and bind the
+// cleanly-mappable surfaces (console log + token counter) to a real Helm run
+// over SSE. The canvas/docks keep their design scaffolding for now.
+const LIVE = new URLSearchParams(window.location.search).has('live');
+const ICON_ROLE = { '⚓': 'helm', '🔬': 'research', '🔨': 'dev', '🧪': 'dev', '🔧': 'dev', '🔎': 'qa', '👁': 'watch' };
+function liveLogLine(ln) {
+  return { who: ln.icon || '·', role: ICON_ROLE[ln.icon] || 'helm', msg: ln.text, ts: (ln.at || '').slice(11, 19), error: ln.level === 'error', id: 'live-' + ln.seq };
+}
+
 // ---------- Top Bar ----------
 function TopBar(props) {
   const { teamMode, optimizeMode, brainOpen, anyActive, tokenCount, currentTask,
@@ -90,7 +99,7 @@ function HelmApp() {
   // ---- live simulation ----
   auseEffect(() => {
     const iv = setInterval(() => {
-      if (paused) return;
+      if (paused || LIVE) return;
       setLive(prev => {
         const next = { ...prev };
         AGENTS.forEach(a => {
@@ -112,7 +121,7 @@ function HelmApp() {
   // ---- log streaming ----
   auseEffect(() => {
     const iv = setInterval(() => {
-      if (paused) return;
+      if (paused || LIVE) return;
       const roles = Object.keys(LOG_TEMPLATES);
       const role = roles[Math.floor(Math.random() * roles.length)];
       const who = AGENTS.filter(a => a.role === role)[0];
@@ -127,6 +136,24 @@ function HelmApp() {
     }, 1700);
     return () => clearInterval(iv);
   }, [paused]);
+
+  // ---- LIVE: bind console + token counter to a real Helm run via SSE ----
+  auseEffect(() => {
+    if (!LIVE) return;
+    const es = new EventSource('/api/events');
+    es.onmessage = (e) => {
+      let ev; try { ev = JSON.parse(e.data); } catch (_) { return; }
+      if (ev.type === 'log') {
+        setLogs(l => [...l.slice(-240), liveLogLine(ev.line)]);
+      } else if (ev.type === 'tokens') {
+        setTokenCount(ev.tokens);
+      } else if (ev.type === 'snapshot') {
+        setLogs(ev.state.log.map(liveLogLine));
+        if (ev.state.tokens) setTokenCount(ev.state.tokens);
+      }
+    };
+    return () => es.close();
+  }, []);
 
   // ---- steady COT rotation ----
   auseEffect(() => {
