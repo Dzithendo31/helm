@@ -5,3 +5,7 @@ dist/
 .env
 .env.*
 coverage/
+
+# macOS / editor cruft
+.DS_Store
+web/screenshots/

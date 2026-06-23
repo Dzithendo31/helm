@@ -10,6 +10,7 @@
   "scripts": {
     "build": "esbuild src/cli.ts --bundle --platform=node --target=node20 --format=esm --packages=external --outfile=dist/cli.js",
     "dev": "tsx src/cli.ts",
+    "serve": "tsx src/server/main.ts",
     "start": "node dist/cli.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
