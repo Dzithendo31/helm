@@ -9,3 +9,5 @@ coverage/
 # macOS / editor cruft
 .DS_Store
 web/screenshots/
+
+scripts/*.mjs

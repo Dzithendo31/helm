@@ -53,6 +53,8 @@ export interface SessionOptions {
   readonly rolesDir: string;
   readonly baseDir: string;
   readonly model?: string;
+  /** When set (with the cli runner), Dev writes real files here — real builds. */
+  readonly workspace?: string;
 }
 
 /**
@@ -208,6 +210,9 @@ export class UiSession {
         inbox: this.inbox,
         groundSpec: true,
         baseDir: this.opts.baseDir,
+        ...(this.opts.workspace && this.opts.runnerKind === "cli"
+          ? { devWritesFiles: true, workspace: this.opts.workspace }
+          : {}),
       });
       this.finalize(result);
     } catch (err) {

@@ -89,6 +89,13 @@ function HelmApp() {
   const errors = logs.filter(l => l.error);
   const anyActive = AGENTS.some(a => a.status === 'active');
 
+  // ---- LIVE engine state (from SSE; only populated/used when ?live) ----
+  const [liveTeams, setLiveTeams] = auseState({});
+  const [liveStatus, setLiveStatus] = auseState('idle');
+  const [livePending, setLivePending] = auseState(null);
+  const [liveArtifacts, setLiveArtifacts] = auseState([]);
+  const [liveRequest, setLiveRequest] = auseState(null);
+
   const dockedMap = {
     'dev-team': [artById('spec-1'), artById('task-42')],
     'qa-team': [artById('changelog-1')],
@@ -137,19 +144,29 @@ function HelmApp() {
     return () => clearInterval(iv);
   }, [paused]);
 
-  // ---- LIVE: bind console + token counter to a real Helm run via SSE ----
+  // ---- LIVE: bind the IDE to a real Helm run via SSE ----
   auseEffect(() => {
     if (!LIVE) return;
+    const byId = (arr) => { const o = {}; (arr || []).forEach(t => o[t.id] = t); return o; };
     const es = new EventSource('/api/events');
     es.onmessage = (e) => {
       let ev; try { ev = JSON.parse(e.data); } catch (_) { return; }
-      if (ev.type === 'log') {
-        setLogs(l => [...l.slice(-240), liveLogLine(ev.line)]);
-      } else if (ev.type === 'tokens') {
-        setTokenCount(ev.tokens);
-      } else if (ev.type === 'snapshot') {
-        setLogs(ev.state.log.map(liveLogLine));
-        if (ev.state.tokens) setTokenCount(ev.state.tokens);
+      switch (ev.type) {
+        case 'snapshot':
+          setLogs(ev.state.log.map(liveLogLine));
+          setTokenCount(ev.state.tokens || 0);
+          setLiveTeams(byId(ev.state.teams));
+          setLiveStatus(ev.state.status);
+          setLivePending(ev.state.pending);
+          setLiveArtifacts(ev.state.artifacts || []);
+          setLiveRequest(ev.state.request);
+          break;
+        case 'log': setLogs(l => [...l.slice(-240), liveLogLine(ev.line)]); break;
+        case 'tokens': setTokenCount(ev.tokens); break;
+        case 'team': setLiveTeams(p => ({ ...p, [ev.team.id]: ev.team })); break;
+        case 'status': setLiveStatus(ev.status); break;
+        case 'pending': setLivePending(ev.pending); break;
+        case 'artifact': setLiveArtifacts(a => [...a, ev.artifact]); break;
       }
     };
     return () => es.close();
@@ -309,9 +326,33 @@ function HelmApp() {
   const acceptSuggestion = (id) => { pushToast('SUGGESTION ACCEPTED', 'Micro-task routed to Dev Team.'); spawnTravel({ fromId: 'qa-team', toId: 'dev-team', label: '\u2726 Micro-task', icon: '\u2726', color: ROLE_META.helm.color }); };
   const answerQuestion = (id, how) => { setQuestionTeam(null); pushToast(how === 'user' ? 'ANSWER SENT' : 'ROUTED TO AGENT', how === 'user' ? 'Your answer was injected to the agent.' : 'Agent will attempt to answer autonomously.'); };
 
+  // ---- LIVE prop derivations (map engine state onto the IDE's props) ----
+  const ENGINE_OF = { 'research-team': 'research', 'dev-team': 'dev', 'qa-team': 'quality', 'watchmen': 'watchmen' };
+  const TYPE_MAP = { drift: 'alert', workflow: 'spec', spec: 'spec', task: 'task', suggestion: 'suggestion', blocker: 'blocker', question: 'question', test: 'test' };
+  const canvasLiveTeams = LIVE ? Object.fromEntries(Object.keys(ENGINE_OF).map(cid => [cid, liveTeams[ENGINE_OF[cid]]])) : null;
+  const leaderLive = LIVE ? liveTeams['helm-leader'] : null;
+  const specPending = LIVE && livePending && livePending.kind === 'spec';
+  const liveCot = LIVE ? [
+    'Status: ' + liveStatus,
+    leaderLive && leaderLive.task ? '▸ ' + leaderLive.task : '▸ orchestrating',
+    specPending ? '▸ Spec ready — Accept to approve' : '',
+  ].filter(Boolean) : null;
+  const apiCmd = (body) => fetch('/api/command', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const liveIdle = ['idle', 'delivered', 'halted', 'needs-human', 'error'].indexOf(liveStatus) !== -1;
+  const liveSend = (text) => {
+    setChatLog(c => [...c, { id: 'cu' + (++lc.current), role: 'user', text }]);
+    apiCmd(liveIdle ? { kind: 'newRun', request: text } : { kind: 'steer', message: text });
+  };
+  const liveDockArtifacts = LIVE ? liveArtifacts.map(a => ({
+    id: a.id, type: TYPE_MAP[a.type] || 'task', title: a.title, from: a.from, role: a.role, content: a.content,
+  })) : null;
+  const liveCurrentTask = LIVE
+    ? (liveRequest ? { title: liveRequest, status: liveStatus === 'running' ? 'in-progress' : '' } : null)
+    : tasks.find(t => t.id === activeTaskId);
+
   return ap('div', { className: 'helm-root' + (leftCollapsed ? ' left-collapsed' : '') + (rightCollapsed ? ' right-collapsed' : '') + (consoleCollapsed ? ' console-collapsed' : '') },
     ap(TopBar, {
-      teamMode, optimizeMode, brainOpen, anyActive, tokenCount, currentTask: tasks.find(t => t.id === activeTaskId),
+      teamMode, optimizeMode, brainOpen, anyActive, tokenCount, currentTask: liveCurrentTask,
       onToggleTeam: () => { setTeamMode(m => !m); setLayoutVersion(v => v + 1); },
       onToggleOptimize: () => setOptimizeMode(m => !m),
       onToggleBrain: () => setBrainOpen(b => !b),
@@ -323,23 +364,28 @@ function HelmApp() {
       taskProps: { tasks, activeId: activeTaskId, onStart: startTask, onNewTask: () => setModal({ type: 'newtask' }),
         onReorder: (from, to) => setTasks(ts => { const a = ts.slice(); const fi = a.findIndex(t => t.id === from); const ti2 = a.findIndex(t => t.id === to); const [m] = a.splice(fi, 1); a.splice(ti2, 0, m); return a; }) },
       onUseTemplate: (t) => pushToast('TEMPLATE LOADED', t.name + ' workflow staged on canvas.'),
-      artifactProps: { artifacts: ARTIFACTS, onOpen: setViewArtifact, resolvedBlockers },
+      artifactProps: { artifacts: LIVE ? liveDockArtifacts : ARTIFACTS,
+        onOpen: LIVE ? (id => { const a = liveArtifacts.find(x => x.id === id); if (a) pushToast(a.title, (a.content || '').slice(0, 160)); }) : setViewArtifact,
+        resolvedBlockers },
       onOpenFile: (f) => pushToast('FILE OPENED', f.name + (f.touchedBy ? ' \u00b7 touched by ' + ROLE_META[f.touchedBy].name : '')),
     }),
 
     ap('div', { className: 'area-canvas', style: { position: 'relative' } },
       ap(Canvas, {
         teamMode, optimizeMode, selected, blockedTeam, questionTeam, dockedMap, optCosts,
-        cotText: cotLines, showLeaderActions: leaderActions, leaderAlerting,
+        cotText: LIVE ? liveCot : cotLines, showLeaderActions: LIVE ? specPending : leaderActions, leaderAlerting,
+        liveTeams: canvasLiveTeams,
         travels, layoutVersion, live, startMs, alertRing,
         zoom, offset, setZoom, setOffset,
         onSelect, onSelectAgent, onAddAgent, onOpenArtifact: setViewArtifact, onTravelArrive,
-        onAccept: acceptWorkflow, onModify: () => setModal({ type: 'workflow' }), onReject: () => { setLeaderActions(false); pushToast('WORKFLOW REJECTED', 'Describe the task again to re-plan.'); },
+        onAccept: LIVE ? (() => apiCmd({ kind: 'approveSpec' })) : acceptWorkflow,
+        onModify: () => setModal({ type: 'workflow' }),
+        onReject: LIVE ? (() => apiCmd({ kind: 'rejectSpec' })) : (() => { setLeaderActions(false); pushToast('WORKFLOW REJECTED', 'Describe the task again to re-plan.'); }),
         showMinimap, onToggleMinimap: () => setShowMinimap(s => !s),
       }),
 
-      // demo control
-      ap('div', { className: 'demo-fab' },
+      // demo control (hidden in live mode)
+      !LIVE && ap('div', { className: 'demo-fab' },
         ap('span', { className: 'df-text' }, demoRunning ? 'Demo running' : 'Watch HELM work'),
         demoRunning && ap('span', { className: 'df-step' }, 'step ' + demoStep + '/6'),
         ap('button', { className: 'demo-run-btn' + (demoRunning ? ' running' : ''), onClick: runDemo }, demoRunning ? '\u25a0 Stop' : '\u25b6 Run Demo')),
@@ -359,7 +405,7 @@ function HelmApp() {
     ap(RightDock, {
       collapsed: rightCollapsed, onToggle: () => setRightCollapsed(c => !c),
       selected, live, onSelectAgent, onSendInstruction, onReassign, onKill,
-      chatLog, onChatSend: sendToLeader, onChatAction, tokenCount, onTalkToLeader: talkToLeader,
+      chatLog, onChatSend: LIVE ? liveSend : sendToLeader, onChatAction, tokenCount, onTalkToLeader: talkToLeader,
     }),
 
     ap(Console, { logs, messages, errors, collapsed: consoleCollapsed, onToggle: () => setConsoleCollapsed(c => !c), onClear: () => { setLogs([]); setMessages([]); }, onPauseChange: setPaused }),

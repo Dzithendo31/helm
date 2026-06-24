@@ -38,7 +38,7 @@ function TeamNode(props) {
   const meta = ROLE_META[team.role];
   const color = meta.color;
   const agents = team.agents.map(agentById);
-  const activeCount = agents.filter(a => a.status === 'active' || a.status === 'partial').length;
+  const lt = props.liveTeam; // live engine state for this team (?live mode)
 
   // aggregate live numbers
   let combinedTokens = 0, avgProg = 0;
@@ -48,6 +48,14 @@ function TeamNode(props) {
     avgProg += l ? l.progress : a.progress;
   });
   avgProg = Math.round(avgProg / agents.length);
+
+  if (lt) {
+    combinedTokens = lt.tokens || 0;
+    avgProg = lt.status === 'done' ? 100 : lt.status === 'active' ? 66 : 0;
+  }
+  const activeCount = lt
+    ? (lt.status === 'active' ? 1 : 0)
+    : agents.filter(a => a.status === 'active' || a.status === 'partial').length;
   const start = props.startMs || Date.now();
 
   const optCost = props.optCost;
@@ -78,14 +86,14 @@ function TeamNode(props) {
     ),
 
     hh('div', { className: 'node-body' },
-      teamMode
+      (teamMode && !lt)
         ? hh('div', { className: 'team-subgrid' },
             agents.map((a, i) => hh(SubAgent, { key: a.id, agent: a, live: live[a.id], color, index: i, onClick: onSelectAgent })),
             !isWatch && hh('div', { className: 'team-add', onClick: (e) => { e.stopPropagation(); onAddAgent(team.id); }, title: 'Add agent' }, '+'),
           )
         : hh('div', null,
             hh('div', { className: 'node-task-label' }, isWatch ? 'Surveillance' : 'Team task'),
-            hh('div', { className: 'node-task' }, team.task),
+            hh('div', { className: 'node-task' }, lt ? (lt.task || team.task) : team.task),
             hh('div', { className: 'node-progress ' + (activeCount > 0 ? 'striping' : '') },
               hh('i', { style: { width: avgProg + '%', background: color } })),
           ),

@@ -232,6 +232,7 @@ function Canvas(props) {
       TEAMS.map(team => React.createElement('div', { key: team.id, ref: setRef(team.id) },
         React.createElement(TeamNode, {
           team, layout: NODE_LAYOUT[team.id], live: props.live, selected: selected === team.id,
+          liveTeam: props.liveTeams && props.liveTeams[team.id],
           teamMode, optimizeMode, blocked: blockedTeam === team.id, question: questionTeam === team.id,
           dockedArtifacts: dockedMap[team.id], optCost: optCosts[team.id],
           isWatch: team.id === 'watchmen', startMs,
