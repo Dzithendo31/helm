@@ -67,12 +67,18 @@ export interface UiPending {
   readonly ref?: string;
 }
 
+export interface UiRequirement {
+  readonly id: string;
+  readonly statement: string;
+}
+
 export interface UiState {
   runId: string | null;
   request: string | null;
   status: UiRunStatus;
   config: { teamMode: boolean; optimise: boolean };
   teams: UiTeam[];
+  requirements: UiRequirement[];
   artifacts: UiArtifact[];
   log: UiLogLine[];
   tokens: number;
@@ -90,6 +96,7 @@ export type UiEvent =
   | { seq: number; type: "log"; line: UiLogLine }
   | { seq: number; type: "tokens"; tokens: number; costUsd: number; savedTokens: number }
   | { seq: number; type: "pending"; pending: UiPending | null }
+  | { seq: number; type: "requirements"; requirements: UiRequirement[] }
   | { seq: number; type: "config"; config: { teamMode: boolean; optimise: boolean } };
 
 /** Commands the UI sends to /api/command. */

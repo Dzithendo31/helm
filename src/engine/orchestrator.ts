@@ -274,9 +274,11 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
           mode: "spec-research",
           instruction: withSchema(
             `Investigate and refine this draft spec for the request: "${input.request}". ` +
-              "Read the codebase if it is available to ground the requirements. Add anything missing, " +
-              "sharpen acceptance criteria, and correct risk/confidence. Set \"confident\" to true only " +
-              "when the spec is complete and correct.",
+              "Read the codebase if it is available to ground the requirements. CONSOLIDATE over-decomposed " +
+              "requirements and merge duplicates — prefer the FEWEST, well-formed requirements (fold edge cases " +
+              "into acceptance criteria, never into new requirements). Only add a requirement for genuinely " +
+              "missing DISTINCT behaviour. Sharpen acceptance criteria and correct risk/confidence. Set " +
+              "\"confident\" to true only when the spec is complete and correct.",
             SPEC_RESEARCH_SCHEMA,
           ),
           payload: { request: input.request, draft: current },
@@ -318,7 +320,7 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
       instruction: withSchema(
         feedback
           ? `Revise the Spec given this feedback: ${feedback}`
-          : `Write a Spec for this request: ${input.request}. Keep each statement to one concise sentence.`,
+          : `Write a MINIMAL Spec for this request: ${input.request}. Use the FEWEST requirements that capture genuinely distinct behaviour — do NOT split one function, file, or concern into multiple requirements, and fold edge cases into a single requirement's acceptance criteria. A small task is usually 1–2 requirements, rarely more than 4. Keep each statement to one concise sentence.`,
         SPEC_SCHEMA,
       ),
       payload: { request: input.request, feedback },

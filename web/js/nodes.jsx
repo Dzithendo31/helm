@@ -93,7 +93,7 @@ function TeamNode(props) {
           )
         : hh('div', null,
             hh('div', { className: 'node-task-label' }, isWatch ? 'Surveillance' : 'Team task'),
-            hh('div', { className: 'node-task' }, lt ? (lt.task || team.task) : team.task),
+            hh('div', { className: 'node-task' }, lt ? (lt.task || '—') : team.task),
             hh('div', { className: 'node-progress ' + (activeCount > 0 ? 'striping' : '') },
               hh('i', { style: { width: avgProg + '%', background: color } })),
           ),

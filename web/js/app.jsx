@@ -12,6 +12,16 @@ const ICON_ROLE = { '⚓': 'helm', '🔬': 'research', '🔨': 'dev', '🧪': 'd
 function liveLogLine(ln) {
   return { who: ln.icon || '·', role: ICON_ROLE[ln.icon] || 'helm', msg: ln.text, ts: (ln.at || '').slice(11, 19), error: ln.level === 'error', id: 'live-' + ln.seq };
 }
+const ART_TYPE_MAP = { drift: 'alert', workflow: 'spec', spec: 'spec', task: 'task', suggestion: 'suggestion', blocker: 'blocker', question: 'question', test: 'test' };
+const ART_ROLE_MAP = { quality: 'qa', helm: 'helm', dev: 'dev', research: 'research', watch: 'watch' };
+function liveArtifactUi(a) {
+  return { id: a.id, type: ART_TYPE_MAP[a.type] || 'task', title: a.title, from: a.from || 'Helm-Leader', role: ART_ROLE_MAP[a.role] || 'helm', content: a.content || '' };
+}
+function injectArtifact(a) {
+  const m = liveArtifactUi(a);
+  const i = window.ARTIFACTS.findIndex(x => x.id === m.id);
+  if (i === -1) window.ARTIFACTS.push(m); else window.ARTIFACTS[i] = m;
+}
 
 // ---------- Top Bar ----------
 function TopBar(props) {
@@ -94,6 +104,7 @@ function HelmApp() {
   const [liveStatus, setLiveStatus] = auseState('idle');
   const [livePending, setLivePending] = auseState(null);
   const [liveArtifacts, setLiveArtifacts] = auseState([]);
+  const [liveRequirements, setLiveRequirements] = auseState([]);
   const [liveRequest, setLiveRequest] = auseState(null);
 
   const dockedMap = {
@@ -147,6 +158,7 @@ function HelmApp() {
   // ---- LIVE: bind the IDE to a real Helm run via SSE ----
   auseEffect(() => {
     if (!LIVE) return;
+    window.ARTIFACTS.length = 0; // the artifact viewer should only ever see live artifacts
     const byId = (arr) => { const o = {}; (arr || []).forEach(t => o[t.id] = t); return o; };
     const es = new EventSource('/api/events');
     es.onmessage = (e) => {
@@ -158,7 +170,9 @@ function HelmApp() {
           setLiveTeams(byId(ev.state.teams));
           setLiveStatus(ev.state.status);
           setLivePending(ev.state.pending);
+          (ev.state.artifacts || []).forEach(injectArtifact);
           setLiveArtifacts(ev.state.artifacts || []);
+          setLiveRequirements(ev.state.requirements || []);
           setLiveRequest(ev.state.request);
           break;
         case 'log': setLogs(l => [...l.slice(-240), liveLogLine(ev.line)]); break;
@@ -166,7 +180,8 @@ function HelmApp() {
         case 'team': setLiveTeams(p => ({ ...p, [ev.team.id]: ev.team })); break;
         case 'status': setLiveStatus(ev.status); break;
         case 'pending': setLivePending(ev.pending); break;
-        case 'artifact': setLiveArtifacts(a => [...a, ev.artifact]); break;
+        case 'requirements': setLiveRequirements(ev.requirements || []); break;
+        case 'artifact': injectArtifact(ev.artifact); setLiveArtifacts(a => [...a, ev.artifact]); break;
       }
     };
     return () => es.close();
@@ -343,11 +358,16 @@ function HelmApp() {
     setChatLog(c => [...c, { id: 'cu' + (++lc.current), role: 'user', text }]);
     apiCmd(liveIdle ? { kind: 'newRun', request: text } : { kind: 'steer', message: text });
   };
-  const liveDockArtifacts = LIVE ? liveArtifacts.map(a => ({
-    id: a.id, type: TYPE_MAP[a.type] || 'task', title: a.title, from: a.from, role: a.role, content: a.content,
+  const liveDockArtifacts = LIVE ? liveArtifacts.map(liveArtifactUi) : null;
+  const liveQueueTasks = LIVE ? liveRequirements.map((r, i) => ({
+    id: i + 1, title: r.statement, priority: 'P2', complexity: '—',
+    status: liveStatus === 'delivered' ? 'done'
+      : (liveStatus === 'running' || liveStatus === 'awaiting-approval') ? 'in-progress' : 'queued',
   })) : null;
+  const activeTeam = LIVE ? Object.values(liveTeams).find(t => t && t.status === 'active') : null;
   const liveCurrentTask = LIVE
-    ? (liveRequest ? { title: liveRequest, status: liveStatus === 'running' ? 'in-progress' : '' } : null)
+    ? (activeTeam ? { title: activeTeam.name + ' · ' + (activeTeam.task || 'working'), status: 'in-progress' }
+       : (liveRequest ? { title: liveRequest, status: liveStatus === 'running' ? 'in-progress' : '' } : null))
     : tasks.find(t => t.id === activeTaskId);
 
   return ap('div', { className: 'helm-root' + (leftCollapsed ? ' left-collapsed' : '') + (rightCollapsed ? ' right-collapsed' : '') + (consoleCollapsed ? ' console-collapsed' : '') },
@@ -361,18 +381,18 @@ function HelmApp() {
 
     ap(LeftDock, {
       collapsed: leftCollapsed, onToggle: () => setLeftCollapsed(c => !c),
-      taskProps: { tasks, activeId: activeTaskId, onStart: startTask, onNewTask: () => setModal({ type: 'newtask' }),
+      taskProps: { tasks: LIVE ? liveQueueTasks : tasks, activeId: activeTaskId,
+        onStart: LIVE ? (() => setViewArtifact('spec')) : startTask,
+        onNewTask: () => setModal({ type: 'newtask' }),
         onReorder: (from, to) => setTasks(ts => { const a = ts.slice(); const fi = a.findIndex(t => t.id === from); const ti2 = a.findIndex(t => t.id === to); const [m] = a.splice(fi, 1); a.splice(ti2, 0, m); return a; }) },
       onUseTemplate: (t) => pushToast('TEMPLATE LOADED', t.name + ' workflow staged on canvas.'),
-      artifactProps: { artifacts: LIVE ? liveDockArtifacts : ARTIFACTS,
-        onOpen: LIVE ? (id => { const a = liveArtifacts.find(x => x.id === id); if (a) pushToast(a.title, (a.content || '').slice(0, 160)); }) : setViewArtifact,
-        resolvedBlockers },
+      artifactProps: { artifacts: LIVE ? liveDockArtifacts : ARTIFACTS, onOpen: setViewArtifact, resolvedBlockers },
       onOpenFile: (f) => pushToast('FILE OPENED', f.name + (f.touchedBy ? ' \u00b7 touched by ' + ROLE_META[f.touchedBy].name : '')),
     }),
 
     ap('div', { className: 'area-canvas', style: { position: 'relative' } },
       ap(Canvas, {
-        teamMode, optimizeMode, selected, blockedTeam, questionTeam, dockedMap, optCosts,
+        teamMode, optimizeMode, selected, blockedTeam, questionTeam, dockedMap: LIVE ? {} : dockedMap, optCosts,
         cotText: LIVE ? liveCot : cotLines, showLeaderActions: LIVE ? specPending : leaderActions, leaderAlerting,
         liveTeams: canvasLiveTeams,
         travels, layoutVersion, live, startMs, alertRing,

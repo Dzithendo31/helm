@@ -14,6 +14,7 @@ import {
   type UiCommand,
   type UiEvent,
   type UiPending,
+  type UiRequirement,
   type UiRunStatus,
   type UiState,
   type UiTeam,
@@ -80,6 +81,7 @@ export class UiSession {
       status: "idle",
       config: { teamMode: true, optimise: true },
       teams: TEAM_DEFS.map((t) => ({ ...t, status: "idle", task: "", tokens: 0 })),
+      requirements: [],
       artifacts: [],
       log: [],
       tokens: 0,
@@ -153,12 +155,15 @@ export class UiSession {
     approveSpec: (spec: SpecBody) =>
       new Promise<SpecDecision>((resolve) => {
         this.specResolver = resolve;
-        const pending: UiPending = {
-          kind: "spec",
-          title: spec.title,
-          detail: renderSpecMarkdown(spec),
-        };
+        const pending: UiPending = { kind: "spec", title: spec.title, detail: renderSpecMarkdown(spec) };
         this.state.pending = pending;
+        // expose the real spec immediately: requirements (for the queue) + a viewable artifact
+        this.state.requirements = spec.requirements.map((r) => ({ id: r.id, statement: r.statement }));
+        this.emit({ type: "requirements", requirements: this.state.requirements });
+        this.addArtifact({
+          id: "spec", type: "spec", title: spec.title, role: "helm", from: "Helm-Leader",
+          content: renderSpecMarkdown(spec),
+        });
         this.setStatus("awaiting-approval");
         this.emit({ type: "pending", pending });
       }),
@@ -176,6 +181,7 @@ export class UiSession {
   private resetForRun(request: string, teamMode: boolean, optimise: boolean): void {
     this.state.request = request;
     this.state.runId = null;
+    this.state.requirements = [];
     this.state.artifacts = [];
     this.state.tokens = 0;
     this.state.costUsd = 0;
@@ -242,7 +248,9 @@ export class UiSession {
       if (t.tokens > 0 && t.status !== "error") t.status = "done";
     }
 
-    for (const a of artifactsFromResult(result)) this.addArtifact(a);
+    for (const a of artifactsFromResult(result)) {
+      if (!this.state.artifacts.some((x) => x.id === a.id)) this.addArtifact(a);
+    }
 
     this.state.tokens = result.ledger.entries.reduce((s, e) => s + e.inputTokens + e.outputTokens, 0);
     this.state.costUsd = Number((this.state.tokens * COST_PER_TOKEN).toFixed(4));
@@ -323,7 +331,7 @@ function uniformModels(model: string) {
 function artifactsFromResult(r: RunResult): UiArtifact[] {
   const out: UiArtifact[] = [];
   out.push({
-    id: r.spec.id,
+    id: "spec",
     type: "spec",
     title: r.spec.body.title,
     role: "helm",
@@ -332,7 +340,7 @@ function artifactsFromResult(r: RunResult): UiArtifact[] {
   });
   if (r.workflow) {
     out.push({
-      id: r.workflow.id,
+      id: "workflow",
       type: "workflow",
       title: "Workflow plan",
       role: "helm",
