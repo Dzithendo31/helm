@@ -266,25 +266,30 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
     const workspace = devWrites ? input.workspace : undefined;
     report({ kind: "begin", icon: "🔬", label: "Research · grounding the spec" });
     for (let round = 0; round < MAX_RESEARCH_ROUNDS; round += 1) {
-      const res = await runner.run<{ confident?: unknown }>({
-        team: teams.Research.name,
-        model: teams.Research.model,
-        role: teams.Research.role,
-        mode: "spec-research",
-        instruction: withSchema(
-          `Investigate and refine this draft spec for the request: "${input.request}". ` +
-            "Read the codebase if it is available to ground the requirements. Add anything missing, " +
-            "sharpen acceptance criteria, and correct risk/confidence. Set \"confident\" to true only " +
-            "when the spec is complete and correct.",
-          SPEC_RESEARCH_SCHEMA,
-        ),
-        payload: { request: input.request, draft: current },
-        ...(workspace ? { tools: [...RESEARCH_READ_TOOLS], cwd: workspace } : {}),
-      });
-      ledger = record(ledger, led(teams.Research, "spec", res.usage));
-      const refined = parseSeeds(res.data);
-      if (refined.length > 0) current = refined;
-      if (res.data?.confident === true) break;
+      try {
+        const res = await runner.run<{ confident?: unknown }>({
+          team: teams.Research.name,
+          model: teams.Research.model,
+          role: teams.Research.role,
+          mode: "spec-research",
+          instruction: withSchema(
+            `Investigate and refine this draft spec for the request: "${input.request}". ` +
+              "Read the codebase if it is available to ground the requirements. Add anything missing, " +
+              "sharpen acceptance criteria, and correct risk/confidence. Set \"confident\" to true only " +
+              "when the spec is complete and correct.",
+            SPEC_RESEARCH_SCHEMA,
+          ),
+          payload: { request: input.request, draft: current },
+          ...(workspace ? { tools: [...RESEARCH_READ_TOOLS], cwd: workspace } : {}),
+        });
+        ledger = record(ledger, led(teams.Research, "spec", res.usage));
+        const refined = parseSeeds(res.data);
+        if (refined.length > 0) current = refined;
+        if (res.data?.confident === true) break;
+      } catch {
+        // Grounding is best-effort: a timeout/error keeps the draft spec, never crashes the run.
+        break;
+      }
     }
     report({
       kind: "end",
@@ -728,23 +733,34 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
 
     for (let round = 1; verification.ran && !verification.passed && round <= MAX_FIX_ROUNDS; round += 1) {
       report({ kind: "begin", icon: "🔧", label: `Dev · fixing failing tests (round ${round})` });
-      const fix = await runner.run({
-        team: teams.Dev.name,
-        model: teams.Dev.model,
-        role: teams.Dev.role,
-        mode: "produce",
-        instruction: withSchema(
-          `The test command "${verification.command}" failed. Fix the code and/or the tests so the ` +
-            "suite passes. Do NOT delete or weaken tests just to make them pass. Test output follows:\n" +
-            verification.output.slice(-1500),
-          TASK_SCHEMA,
-        ),
-        payload: { request: input.request, command: verification.command },
-        tools: [...DEV_TOOLS],
-        cwd: devCwd,
-      });
-      ledger = record(ledger, led(teams.Dev, "fix", fix.usage));
-      report({ kind: "end", icon: "🔧", label: `Dev · fix round ${round}`, status: "ok" });
+      try {
+        const fix = await runner.run({
+          team: teams.Dev.name,
+          model: teams.Dev.model,
+          role: teams.Dev.role,
+          mode: "produce",
+          instruction: withSchema(
+            `The test command "${verification.command}" failed. Fix the code and/or the tests so the ` +
+              "suite passes. Do NOT delete or weaken tests just to make them pass. Test output follows:\n" +
+              verification.output.slice(-1500),
+            TASK_SCHEMA,
+          ),
+          payload: { request: input.request, command: verification.command },
+          tools: [...DEV_TOOLS],
+          cwd: devCwd,
+        });
+        ledger = record(ledger, led(teams.Dev, "fix", fix.usage));
+        report({ kind: "end", icon: "🔧", label: `Dev · fix round ${round}`, status: "ok" });
+      } catch (err) {
+        // A fix attempt that times out / errors must not crash the whole run.
+        report({
+          kind: "end",
+          icon: "🔧",
+          label: `Dev · fix round ${round} abandoned: ${err instanceof Error ? err.message : String(err)}`,
+          status: "error",
+        });
+        break;
+      }
       verification = await runTests("Re-running the test suite");
     }
 

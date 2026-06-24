@@ -169,7 +169,8 @@ export class UiSession {
 
   private makeRunner(): AgentRunner {
     if (this.opts.runnerKind === "mock") return new MockAgentRunner();
-    return new ClaudeCliRunner({ timeoutMs: 600_000 });
+    // Stuck agents fail in 4 min rather than hanging the UI for 10.
+    return new ClaudeCliRunner({ timeoutMs: 240_000 });
   }
 
   private resetForRun(request: string, teamMode: boolean, optimise: boolean): void {

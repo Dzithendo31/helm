@@ -454,6 +454,31 @@ describe("orchestrator", () => {
     await rm(ws, { recursive: true, force: true });
   });
 
+  test("a fix-round agent failure is caught and does not crash the run", async () => {
+    class FixThrowsRunner implements AgentRunner {
+      private readonly base = new MockAgentRunner({ requirements: [{ statement: "X" }] });
+      async run<T>(req: AgentRequest): Promise<AgentResponse<T>> {
+        if (req.mode === "produce" && req.team === "Dev" && req.instruction.includes("Fix the code")) {
+          throw new Error("claude timed out after 240000ms");
+        }
+        return this.base.run<T>(req);
+      }
+    }
+    const result = await runHelm({
+      request: "x",
+      config: { ...defaultConfig(), teamMode: false },
+      runner: new FixThrowsRunner(),
+      human: new AutoApproveHuman(),
+      teams,
+      baseDir,
+      devWritesFiles: true,
+      workspace: baseDir,
+      testCommand: "exit 1",
+    });
+    expect(["delivered", "halted", "needs-human"]).toContain(result.status); // reached a terminal state
+    expect(result.verification?.passed).toBe(false);
+  });
+
   test("test-fix loop gives up after the round limit", async () => {
     let fixAttempts = 0;
     class NeverFixRunner implements AgentRunner {
