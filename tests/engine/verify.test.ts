@@ -21,6 +21,21 @@ describe("detectTestCommand", () => {
   test("returns null when nothing is detected", () => {
     expect(detectTestCommand(dir)).toBeNull();
   });
+
+  test("runs bare node:test files via the bundled tsx when there is no project config", async () => {
+    await writeFile(join(dir, "reverseString.test.ts"), "import { test } from 'node:test';", "utf8");
+    const cmd = detectTestCommand(dir);
+    expect(cmd).not.toBeNull();
+    expect(cmd).toContain("--test");
+    expect(cmd).toContain("tsx");
+    expect(cmd).toContain("reverseString.test.ts");
+  });
+
+  test("a real package.json test script wins over bare test files", async () => {
+    await writeFile(join(dir, "package.json"), JSON.stringify({ scripts: { test: "vitest" } }), "utf8");
+    await writeFile(join(dir, "x.test.ts"), "", "utf8");
+    expect(detectTestCommand(dir)).toBe("npm test --silent");
+  });
 });
 
 describe("runVerification", () => {
