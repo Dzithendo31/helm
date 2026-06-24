@@ -41,43 +41,6 @@ function TaskQueue({ tasks, activeId, onStart, onNewTask, onReorder }) {
   );
 }
 
-// ---- Templates ----
-function Templates({ onUse }) {
-  return he(DockSection, { title: 'Templates' },
-    TEMPLATES.map((t, i) => he('div', { key: i, className: 'tmpl-row' },
-      he('span', { className: 'ti' }, t.icon),
-      he('div', null, he('div', { className: 'tn' }, t.name), he('div', { className: 'td' }, t.desc)),
-      he('button', { className: 'tmpl-use', onClick: (e) => { e.stopPropagation(); onUse(t); } }, '\u25b6 Use'),
-    )),
-    he('button', { className: 'dock-btn', onClick: () => onUse({ name: 'Current', desc: 'saved' }) }, '+ Save Current'),
-  );
-}
-
-// ---- Repo Navigator ----
-function TreeNode({ node, depth, onOpenFile }) {
-  const [open, setOpen] = duseState(node.open || false);
-  const pad = { paddingLeft: 6 + depth * 14 };
-  if (node.type === 'dir') {
-    return he('div', null,
-      he('div', { className: 'tmpl-row', style: { ...pad, padding: '4px 6px', paddingLeft: pad.paddingLeft }, onClick: () => setOpen(o => !o) },
-        he('span', { className: 'chev', style: { transform: open ? 'none' : 'rotate(-90deg)', display: 'inline-flex' } }, he(IconChevron, { size: 11 })),
-        he('span', { style: { color: 'var(--text-secondary)' } }, he(IconFolder, { size: 13 })),
-        he('span', { className: 'tn', style: { fontSize: 11.5 } }, node.name),
-      ),
-      open && node.children && node.children.map((c, i) => he(TreeNode, { key: i, node: c, depth: depth + 1, onOpenFile })),
-    );
-  }
-  const glow = node.touchedBy ? ROLE_META[node.touchedBy].color : null;
-  return he('div', { className: 'tmpl-row', style: { ...pad, padding: '4px 6px', paddingLeft: pad.paddingLeft }, onClick: () => onOpenFile(node) },
-    he('span', { style: { color: glow || 'var(--text-muted)' } }, he(IconFile, { size: 12 })),
-    he('span', { className: 'tn', style: { fontSize: 11.5, color: glow || 'var(--text-primary)', textShadow: glow ? `0 0 8px ${rgba(glow,0.6)}` : 'none' } }, node.name),
-  );
-}
-function RepoNav({ onOpenFile }) {
-  return he(DockSection, { title: 'Repo', defaultOpen: false },
-    REPO_TREE.map((n, i) => he(TreeNode, { key: i, node: n, depth: 0, onOpenFile })));
-}
-
 // ---- Artifacts Panel ----
 const ART_FILTERS = ['All', 'Spec', 'Tasks', 'Reviews', 'Alerts'];
 function matchFilter(a, f) {
@@ -134,7 +97,6 @@ function LeftDock(props) {
       he('button', { className: 'rail-btn', onClick: props.onToggle, title: 'Expand' }, he(IconPanelLeft, { size: 17 })),
       he('button', { className: 'rail-btn', title: 'Queue', style: { color: 'var(--role-helm)' } }, he(IconBolt, { size: 16 })),
       he('button', { className: 'rail-btn', title: 'Artifacts' }, he(IconFile, { size: 16 })),
-      he('button', { className: 'rail-btn', title: 'Repo' }, he(IconFolder, { size: 16 })),
     );
   }
   return he('div', { className: 'dock dock-left area-left' },
@@ -143,11 +105,9 @@ function LeftDock(props) {
       he('button', { className: 'icon-x', onClick: props.onToggle, title: 'Collapse' }, he(IconPanelLeft, { size: 15 }))),
     he('div', { className: 'dock-scroll' },
       he(TaskQueue, props.taskProps),
-      he(Templates, { onUse: props.onUseTemplate }),
       he(ArtifactsPanel, props.artifactProps),
-      he(RepoNav, { onOpenFile: props.onOpenFile }),
     ),
   );
 }
 
-Object.assign(window, { LeftDock, DockSection, TaskQueue, Templates, RepoNav, ArtifactsPanel });
+Object.assign(window, { LeftDock, DockSection, TaskQueue, ArtifactsPanel });

@@ -396,9 +396,7 @@ function HelmApp() {
         onStart: LIVE ? (() => setViewArtifact('spec')) : startTask,
         onNewTask: () => setModal({ type: 'newtask' }),
         onReorder: (from, to) => setTasks(ts => { const a = ts.slice(); const fi = a.findIndex(t => t.id === from); const ti2 = a.findIndex(t => t.id === to); const [m] = a.splice(fi, 1); a.splice(ti2, 0, m); return a; }) },
-      onUseTemplate: (t) => pushToast('TEMPLATE LOADED', t.name + ' workflow staged on canvas.'),
       artifactProps: { artifacts: LIVE ? liveDockArtifacts : ARTIFACTS, onOpen: setViewArtifact, resolvedBlockers },
-      onOpenFile: (f) => pushToast('FILE OPENED', f.name + (f.touchedBy ? ' \u00b7 touched by ' + ROLE_META[f.touchedBy].name : '')),
     }),
 
     ap('div', { className: 'area-canvas', style: { position: 'relative' } },

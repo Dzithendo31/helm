@@ -59,38 +59,6 @@ const TASKS = [
   { id: 45, title: 'Write integration tests for API', priority: 'P2', complexity: 'L', status: 'queued' },
 ];
 
-// ---- Workflow templates ----
-const TEMPLATES = [
-  { icon: '\ud83d\udd27', name: 'Bug Fix', desc: '3 agents · quick' },
-  { icon: '\u26a1', name: 'Feature Sprint', desc: '5 teams · complex' },
-  { icon: '\ud83d\udd0d', name: 'Code Review', desc: '2 agents' },
-  { icon: '\ud83c\udfd7', name: 'Refactor', desc: '4 agents · long' },
-];
-
-// ---- Repo tree ----
-const REPO_TREE = [
-  { name: 'src', type: 'dir', open: true, children: [
-    { name: 'auth', type: 'dir', open: true, children: [
-      { name: 'AuthProvider.tsx', type: 'file', touchedBy: 'dev' },
-      { name: 'auth-styles.css', type: 'file', touchedBy: 'dev' },
-      { name: 'useSession.ts', type: 'file', touchedBy: 'research' },
-    ]},
-    { name: 'components', type: 'dir', children: [
-      { name: 'LoginForm.tsx', type: 'file', touchedBy: 'dev' },
-      { name: 'OAuthButtons.tsx', type: 'file' },
-    ]},
-  ]},
-  { name: 'api', type: 'dir', open: true, children: [
-    { name: 'routes', type: 'dir', children: [
-      { name: 'auth.ts', type: 'file', touchedBy: 'watch' },
-    ]},
-    { name: 'middleware.ts', type: 'file' },
-  ]},
-  { name: 'tests', type: 'dir', children: [
-    { name: 'auth.test.ts', type: 'file', touchedBy: 'qa' },
-  ]},
-];
-
 // ---- Artifacts ----
 const ARTIFACTS = [
   { id: 'alert-1', type: 'alert', title: 'Token limit approaching', from: 'Iris', role: 'watch', urgent: true,
@@ -265,7 +233,7 @@ function teamById(id) { return TEAMS.find(t => t.id === id); }
 function artById(id) { return ARTIFACTS.find(a => a.id === id); }
 
 Object.assign(window, {
-  ROLE_META, STATUS_COLOR, AGENTS, TEAMS, TASKS, TEMPLATES, REPO_TREE,
+  ROLE_META, STATUS_COLOR, AGENTS, TEAMS, TASKS,
   ARTIFACTS, ARTIFACT_META, NODE_LAYOUT, BRAIN_NODES, BRAIN_LINKS, BRAIN_STATE_STYLE,
   LOG_SEED, LOG_TEMPLATES, MSG_SEED, COT_LINES,
   fmtTokens, fmtCost, clockNow, agentById, teamById, artById,
