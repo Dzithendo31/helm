@@ -85,6 +85,8 @@ export interface UiState {
   costUsd: number;
   savedTokens: number;
   pending: UiPending | null;
+  /** Absolute folder the Dev team writes real files into (build mode). */
+  workspace: string | null;
 }
 
 /** Incremental events streamed to connected clients (sequence-numbered for replay). */
@@ -101,7 +103,7 @@ export type UiEvent =
 
 /** Commands the UI sends to /api/command. */
 export type UiCommand =
-  | { kind: "newRun"; request: string; teamMode?: boolean; optimise?: boolean }
+  | { kind: "newRun"; request: string; teamMode?: boolean; optimise?: boolean; workspace?: string }
   | { kind: "approveSpec" }
   | { kind: "rejectSpec"; feedback?: string }
   | { kind: "answer"; ref: string; text: string }

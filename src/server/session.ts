@@ -1,3 +1,6 @@
+import { mkdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { resolve, sep } from "node:path";
 import { renderSpecMarkdown, type SpecBody } from "../core/spec";
 import { renderMatrixMarkdown } from "../core/traceability";
 import { MockAgentRunner } from "../agent/mock-runner";
@@ -88,7 +91,28 @@ export class UiSession {
       costUsd: 0,
       savedTokens: 0,
       pending: null,
+      workspace: opts.workspace ?? null,
     };
+  }
+
+  /**
+   * Resolve a user-supplied build folder: expand `~`, make absolute, refuse the
+   * Helm install dir (it would clobber Helm's own source), and create it.
+   */
+  private resolveWorkspace(input?: string): { ok: true; dir: string } | { ok: false; error: string } {
+    const raw = (input ?? this.state.workspace ?? "").trim();
+    if (!raw) return { ok: false, error: "No build folder set — choose where Helm should write files." };
+    const expanded = raw === "~" ? homedir() : raw.startsWith("~/") ? resolve(homedir(), raw.slice(2)) : raw;
+    const dir = resolve(expanded);
+    if (dir === this.opts.baseDir || dir.startsWith(this.opts.baseDir + sep)) {
+      return { ok: false, error: "Refusing to build inside the Helm install directory — choose another folder." };
+    }
+    try {
+      mkdirSync(dir, { recursive: true });
+    } catch (e) {
+      return { ok: false, error: `Cannot create ${dir}: ${e instanceof Error ? e.message : String(e)}` };
+    }
+    return { ok: true, dir };
   }
 
   snapshot(): UiState {
@@ -196,15 +220,27 @@ export class UiSession {
     this.emit({ type: "snapshot", state: this.snapshot() });
   }
 
-  async start(request: string, teamMode: boolean, optimise: boolean): Promise<void> {
+  async start(request: string, teamMode: boolean, optimise: boolean, workspaceInput?: string): Promise<void> {
     if (this.running) {
       this.log("⚠", "A run is already in progress.", "warn");
       return;
+    }
+    // Real builds: resolve the target folder before committing to the run.
+    let workspace: string | undefined;
+    if (this.opts.runnerKind === "cli") {
+      const r = this.resolveWorkspace(workspaceInput);
+      if (!r.ok) {
+        this.log("⚠", r.error, "warn");
+        return;
+      }
+      workspace = r.dir;
+      this.state.workspace = r.dir;
     }
     this.running = true;
     this.resetForRun(request, teamMode, optimise);
     this.setStatus("running");
     this.log("⚓", `New run: ${request}`, "ok");
+    if (workspace) this.log("📁", `Build folder: ${workspace}`, "info");
 
     try {
       const result = await runHelm({
@@ -217,9 +253,7 @@ export class UiSession {
         inbox: this.inbox,
         groundSpec: true,
         baseDir: this.opts.baseDir,
-        ...(this.opts.workspace && this.opts.runnerKind === "cli"
-          ? { devWritesFiles: true, workspace: this.opts.workspace }
-          : {}),
+        ...(workspace ? { devWritesFiles: true, workspace } : {}),
       });
       this.finalize(result);
     } catch (err) {
@@ -269,7 +303,12 @@ export class UiSession {
   command(cmd: UiCommand): { ok: boolean; error?: string } {
     switch (cmd.kind) {
       case "newRun":
-        void this.start(cmd.request, cmd.teamMode ?? this.state.config.teamMode, cmd.optimise ?? this.state.config.optimise);
+        void this.start(
+          cmd.request,
+          cmd.teamMode ?? this.state.config.teamMode,
+          cmd.optimise ?? this.state.config.optimise,
+          cmd.workspace,
+        );
         return { ok: true };
       case "approveSpec":
         if (!this.specResolver) return { ok: false, error: "no spec awaiting approval" };

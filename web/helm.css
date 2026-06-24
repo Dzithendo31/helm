@@ -139,6 +139,22 @@ input { font-family: var(--font-body); }
 .breadcrumb:hover { background: var(--helm-surface-2); border-color: var(--helm-border); }
 .breadcrumb b { color: var(--text-primary); font-weight: 500; }
 
+/* Build-folder selector (where the Dev team writes real files) */
+.build-target {
+  display: flex; align-items: center; gap: 6px;
+  padding: 3px 8px 3px 9px; border-radius: 6px;
+  background: var(--helm-surface-2); border: 1px solid var(--helm-border);
+  transition: border-color .15s, box-shadow .15s;
+}
+.build-target:focus-within { border-color: var(--role-helm); box-shadow: 0 0 0 3px color-mix(in oklab, var(--role-helm) 22%, transparent); }
+.build-target .bt-ico { font-size: 12px; opacity: .85; line-height: 1; }
+.bt-input {
+  width: 248px; max-width: 32vw; border: none; outline: none; background: transparent;
+  color: var(--text-primary); font-size: 11.5px; letter-spacing: -0.01em; padding: 1px 0;
+}
+.bt-input::placeholder { color: var(--text-muted); }
+.bt-input:disabled { color: var(--text-muted); cursor: not-allowed; }
+
 .active-task-pill {
   display: flex; align-items: center; gap: 8px;
   background: var(--helm-surface-2);

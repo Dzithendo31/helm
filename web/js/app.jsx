@@ -4,10 +4,10 @@
 const { useState: auseState, useEffect: auseEffect, useRef: auseRef, useCallback: auseCb } = React;
 const ap = React.createElement;
 
-// LIVE mode (open HELM.html?live): silence the design sim and bind the
-// cleanly-mappable surfaces (console log + token counter) to a real Helm run
-// over SSE. The canvas/docks keep their design scaffolding for now.
-const LIVE = new URLSearchParams(window.location.search).has('live');
+// The IDE is always live: it binds to a real Helm run over SSE (console, token
+// counter, canvas teams, queue, artifacts) and every run writes real files into
+// the selected build folder. The design sim is fully retired.
+const LIVE = true;
 const ICON_ROLE = { '⚓': 'helm', '🔬': 'research', '🔨': 'dev', '🧪': 'dev', '🔧': 'dev', '🔎': 'qa', '👁': 'watch' };
 function liveLogLine(ln) {
   return { who: ln.icon || '·', role: ICON_ROLE[ln.icon] || 'helm', msg: ln.text, ts: (ln.at || '').slice(11, 19), error: ln.level === 'error', id: 'live-' + ln.seq };
@@ -25,14 +25,18 @@ function injectArtifact(a) {
 
 // ---------- Top Bar ----------
 function TopBar(props) {
-  const { teamMode, optimizeMode, brainOpen, anyActive, tokenCount, currentTask,
-          onToggleTeam, onToggleOptimize, onToggleBrain, onTalkToLeader } = props;
+  const { teamMode, optimizeMode, brainOpen, anyActive, tokenCount, currentTask, workspace, busy,
+          onToggleTeam, onToggleOptimize, onToggleBrain, onTalkToLeader, onWorkspaceChange } = props;
   return ap('div', { className: 'topbar area-top' },
     ap('div', { className: 'topbar-cluster' },
       ap('div', { className: 'helm-logo' },
         ap('span', { className: 'helm-wheel' + (anyActive ? ' spinning' : '') }, ap(IconHelm, { size: 22 })),
         ap('span', { className: 'helm-wordmark' }, 'HELM')),
-      ap('div', { className: 'breadcrumb' }, ap('b', null, 'acme-corp'), ' / ', ap('b', null, 'web-platform'))),
+      ap('label', { className: 'build-target', title: 'Build folder — the Dev team writes real files here' },
+        ap('span', { className: 'bt-ico' }, '📁'),
+        ap('input', { className: 'bt-input mono-num', spellCheck: false, disabled: busy,
+          placeholder: '~/path/to/project', value: workspace || '',
+          onChange: (e) => onWorkspaceChange(e.target.value) }))),
 
     ap('div', { className: 'topbar-center' },
       ap('div', { className: 'active-task-pill' + (currentTask && currentTask.status === 'in-progress' ? ' running' : ''), onClick: onTalkToLeader, style: { cursor: 'pointer' }, title: 'Talk to the Helm-Leader' },
@@ -70,7 +74,7 @@ function HelmApp() {
   const [logs, setLogs] = auseState(() => LOG_SEED.map((l, i) => ({ ...l, ts: clockNow(), id: 'seed-l-' + i })));
   const [messages, setMessages] = auseState(() => MSG_SEED.map((m, i) => ({ ...m, ts: clockNow(), id: 'seed-m-' + i })));
   const [paused, setPaused] = auseState(false);
-  const [chatLog, setChatLog] = auseState(() => [{ id: 'c0', role: 'helm', text: "Captain on deck. \u2693 I'm orchestrating the OAuth login flow across Research, Dev and QA \u2014 with the WatchMen on the perimeter. Ask for a status, probe a blocker, or hand me a new task." }]);
+  const [chatLog, setChatLog] = auseState(() => [{ id: 'c0', role: 'helm', text: "Captain on deck. \u2693 Set a build folder up top, then hand me a task \u2014 I'll orchestrate Research, Dev and QA with the WatchMen on the perimeter and write real files into your workspace." }]);
   const [travels, setTravels] = auseState([]);
   const [toasts, setToasts] = auseState([]);
   const [blockedTeam, setBlockedTeam] = auseState(null);
@@ -106,6 +110,7 @@ function HelmApp() {
   const [liveArtifacts, setLiveArtifacts] = auseState([]);
   const [liveRequirements, setLiveRequirements] = auseState([]);
   const [liveRequest, setLiveRequest] = auseState(null);
+  const [liveWorkspace, setLiveWorkspace] = auseState('');
 
   const dockedMap = {
     'dev-team': [artById('spec-1'), artById('task-42')],
@@ -174,6 +179,7 @@ function HelmApp() {
           setLiveArtifacts(ev.state.artifacts || []);
           setLiveRequirements(ev.state.requirements || []);
           setLiveRequest(ev.state.request);
+          setLiveWorkspace(w => w || (ev.state.workspace || ''));
           break;
         case 'log': setLogs(l => [...l.slice(-240), liveLogLine(ev.line)]); break;
         case 'tokens': setTokenCount(ev.tokens); break;
@@ -356,7 +362,9 @@ function HelmApp() {
   const liveIdle = ['idle', 'delivered', 'halted', 'needs-human', 'error'].indexOf(liveStatus) !== -1;
   const liveSend = (text) => {
     setChatLog(c => [...c, { id: 'cu' + (++lc.current), role: 'user', text }]);
-    apiCmd(liveIdle ? { kind: 'newRun', request: text } : { kind: 'steer', message: text });
+    apiCmd(liveIdle
+      ? { kind: 'newRun', request: text, workspace: (liveWorkspace || '').trim() || undefined }
+      : { kind: 'steer', message: text });
   };
   const liveDockArtifacts = LIVE ? liveArtifacts.map(liveArtifactUi) : null;
   const liveQueueTasks = LIVE ? liveRequirements.map((r, i) => ({
@@ -372,7 +380,10 @@ function HelmApp() {
 
   return ap('div', { className: 'helm-root' + (leftCollapsed ? ' left-collapsed' : '') + (rightCollapsed ? ' right-collapsed' : '') + (consoleCollapsed ? ' console-collapsed' : '') },
     ap(TopBar, {
-      teamMode, optimizeMode, brainOpen, anyActive, tokenCount, currentTask: liveCurrentTask,
+      teamMode, optimizeMode, brainOpen, tokenCount, currentTask: liveCurrentTask,
+      anyActive: LIVE ? !!activeTeam : anyActive,
+      workspace: liveWorkspace, busy: !liveIdle,
+      onWorkspaceChange: setLiveWorkspace,
       onToggleTeam: () => { setTeamMode(m => !m); setLayoutVersion(v => v + 1); },
       onToggleOptimize: () => setOptimizeMode(m => !m),
       onToggleBrain: () => setBrainOpen(b => !b),
