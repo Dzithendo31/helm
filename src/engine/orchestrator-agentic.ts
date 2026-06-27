@@ -4,10 +4,11 @@ import { savingsReport } from "../core/ledger";
 import { requirementIds, type SpecBody } from "../core/spec";
 import { newId } from "../core/ids";
 import { buildLeaderMcpServer } from "../agent/leader-mcp";
+import { TranscriptRunner } from "../agent/transcript";
 import { Budget } from "./budget";
 import { LeaderToolkit } from "./leader-toolkit";
 import { noopReporter } from "./events";
-import { persistRun } from "./store";
+import { persistRun, runDir } from "./store";
 import type { RunInput, RunResult } from "./orchestrator";
 
 /**
@@ -27,9 +28,11 @@ export const runHelmAgentic = async (input: RunInput): Promise<RunResult> => {
   const workspace = input.devWritesFiles === true && typeof input.workspace === "string" ? input.workspace : undefined;
   const budget = new Budget(input.budget);
   const leaderCfg = input.teams["Helm-Leader"];
+  // Tee the worker (Dev/Watchmen) calls to the run store when transcripts are on.
+  const runner = input.recordTranscripts ? new TranscriptRunner(input.runner, runDir(baseDir, runId)) : input.runner;
 
   const kit = new LeaderToolkit({
-    runner: input.runner,
+    runner,
     teams: input.teams,
     human: input.human,
     budget,

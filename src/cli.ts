@@ -183,7 +183,7 @@ const main = async (): Promise<void> => {
   if (!args.request) {
     process.stderr.write(
       'Usage: helm "<request>" [--cli|--sdk|--mock] [--autonomous] [--no-team-mode]\n' +
-        "             [--no-optimise] [--bare] [--model <id>] [--build --workspace <dir>] [--transcript]\n",
+        "             [--no-optimise] [--bare] [--model <id>] [--build --workspace <dir>] [--transcript] [--leader-drives]\n",
     );
     process.exitCode = 1;
     return;
