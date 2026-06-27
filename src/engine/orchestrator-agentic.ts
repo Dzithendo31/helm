@@ -75,11 +75,15 @@ export const runHelmAgentic = async (input: RunInput): Promise<RunResult> => {
 
   // Supervisor-owned mandatory checkpoints (I3): always verify + drift before delivery.
   const spec: SpecBody = kit.spec ?? { title: input.request, requirements: [] };
+  // Lifecycle: Draft → NeedsHuman → Accepted (the gate is the human approval).
   let specArtifact = transition(
     createArtifact<SpecBody>({ type: "Spec", body: spec, refs: requirementIds(spec), provenance: { team: "Helm-Leader", agent: "leader", reason: "leader spec" } }),
-    kit.specApproved ? "Accepted" : "NeedsHuman",
-    { team: "Helm-Leader", agent: "leader", reason: kit.specApproved ? "human approved" : "not approved" },
+    "NeedsHuman",
+    { team: "Helm-Leader", agent: "leader", reason: "awaiting human approval" },
   );
+  if (kit.specApproved) {
+    specArtifact = transition(specArtifact, "Accepted", { team: "Helm-Leader", agent: "leader", reason: "human approved" });
+  }
 
   let drift = false;
   let gaps = false;

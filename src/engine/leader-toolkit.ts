@@ -138,7 +138,7 @@ export class LeaderToolkit {
 
     const workspace = this.deps.workspace;
     const instruction = workspace
-      ? `Implement ONLY requirement ${input.reqId}: ${input.statement}. Honor the original request's language and stack exactly: "${this.deps.request}". Reuse and extend existing files; write the minimum needed, then report the relative paths you created or modified. If the acceptance criteria describe testable behavior, also write a runnable test.`
+      ? `Implement ONLY requirement ${input.reqId}: ${input.statement}. Honor the original request's language and stack exactly: "${this.deps.request}". Reuse and extend the files that already exist — do NOT recreate them. Do NOT add package.json, build or test config, README, or any other scaffolding or docs unless the requirement explicitly asks for it. Write the minimum files needed, then report the relative paths you created or modified. If the acceptance criteria describe testable behavior, also write a runnable test file covering them.`
       : `Implement ${input.reqId}: ${input.statement}`;
     const prod = await this.deps.runner.run<Partial<TaskBody>>({
       team: this.deps.teams.Dev.name,
