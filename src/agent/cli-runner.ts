@@ -1,5 +1,14 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import type { AgentRequest, AgentResponse, AgentRunner, AgentUsage } from "./runner";
+import type {
+  AgentRequest,
+  AgentResponse,
+  AgentRunner,
+  AgentSession,
+  AgentTurn,
+  AgentUsage,
+  SessionOptions,
+  StatefulAgentRunner,
+} from "./runner";
 import { buildAgentPrompt, parseJsonLoose } from "./prompt";
 
 /** In-flight claude subprocesses, so an interrupt handler can kill them all. */
@@ -62,6 +71,7 @@ interface RawEnvelope {
   readonly result?: unknown;
   readonly is_error?: unknown;
   readonly total_cost_usd?: unknown;
+  readonly session_id?: unknown;
   readonly usage?: {
     readonly input_tokens?: unknown;
     readonly output_tokens?: unknown;
@@ -70,13 +80,15 @@ interface RawEnvelope {
   };
 }
 
-/** Parse the `claude --output-format json` envelope into text + usage. */
-export const parseEnvelope = (stdout: string): { text: string; usage: AgentUsage } => {
+/** Parse the `claude --output-format json` envelope into text + usage + session id. */
+export const parseEnvelope = (
+  stdout: string,
+): { text: string; usage: AgentUsage; sessionId: string | null } => {
   let env: RawEnvelope;
   try {
     env = JSON.parse(stdout) as RawEnvelope;
   } catch {
-    return { text: stdout, usage: { inputTokens: 0, outputTokens: 0 } };
+    return { text: stdout, usage: { inputTokens: 0, outputTokens: 0 }, sessionId: null };
   }
   const u = env.usage ?? {};
   const inputTokens =
@@ -86,7 +98,11 @@ export const parseEnvelope = (stdout: string): { text: string; usage: AgentUsage
     outputTokens: num(u.output_tokens),
     ...(typeof env.total_cost_usd === "number" ? { costUsd: env.total_cost_usd } : {}),
   };
-  return { text: typeof env.result === "string" ? env.result : "", usage };
+  return {
+    text: typeof env.result === "string" ? env.result : "",
+    usage,
+    sessionId: typeof env.session_id === "string" ? env.session_id : null,
+  };
 };
 
 const defaultExec: CommandExecutor = (bin, args, opts) =>
@@ -116,10 +132,10 @@ const defaultExec: CommandExecutor = (bin, args, opts) =>
     });
   });
 
-export class ClaudeCliRunner implements AgentRunner {
+export class ClaudeCliRunner implements StatefulAgentRunner {
   constructor(private readonly options: ClaudeCliOptions = {}) {}
 
-  buildArgs(req: AgentRequest): string[] {
+  buildArgs(req: AgentRequest, resumeId?: string | null): string[] {
     const args = [
       "-p",
       buildAgentPrompt(req),
@@ -127,9 +143,13 @@ export class ClaudeCliRunner implements AgentRunner {
       "json",
       "--model",
       req.model,
-      "--system-prompt",
-      req.role,
     ];
+    // On a resumed turn the session already carries the system prompt; resume by id.
+    if (resumeId) {
+      args.push("--resume", resumeId);
+    } else {
+      args.push("--system-prompt", req.role);
+    }
     // Per-call tools (req.tools) take precedence over the runner default.
     const tools = req.tools ?? this.options.allowedTools ?? [];
     if (tools.length === 0) {
@@ -143,12 +163,16 @@ export class ClaudeCliRunner implements AgentRunner {
     return args;
   }
 
-  async run<T>(req: AgentRequest): Promise<AgentResponse<T>> {
+  /** One `claude -p` invocation, optionally resuming a session. Returns the parsed envelope. */
+  private async invoke<T>(
+    req: AgentRequest,
+    resumeId: string | null,
+  ): Promise<AgentResponse<T> & { sessionId: string | null }> {
     const bin = this.options.bin ?? process.env.HELM_CLAUDE_BIN ?? "claude";
     const exec = this.options.exec ?? defaultExec;
     const timeoutMs = this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
-    const result = await exec(bin, this.buildArgs(req), {
+    const result = await exec(bin, this.buildArgs(req, resumeId), {
       timeoutMs,
       ...(req.cwd ? { cwd: req.cwd } : {}),
     });
@@ -158,7 +182,43 @@ export class ClaudeCliRunner implements AgentRunner {
       );
     }
 
-    const { text, usage } = parseEnvelope(result.stdout);
-    return { text, data: parseJsonLoose<T>(text), usage };
+    const { text, usage, sessionId } = parseEnvelope(result.stdout);
+    return { text, data: parseJsonLoose<T>(text), usage, sessionId };
+  }
+
+  async run<T>(req: AgentRequest): Promise<AgentResponse<T>> {
+    const { text, data, usage } = await this.invoke<T>(req, null);
+    return { text, data, usage };
+  }
+
+  /** A persistent Leader context: each turn resumes the prior `claude` session by id. */
+  openSession(opts: SessionOptions): AgentSession {
+    let sessionId: string | null = null;
+    let closed = false;
+    const invoke = this.invoke.bind(this);
+    return {
+      get id() {
+        return sessionId;
+      },
+      async send<T>(turn: AgentTurn): Promise<AgentResponse<T>> {
+        if (closed) throw new Error("session is closed");
+        const req: AgentRequest = {
+          team: opts.team,
+          model: opts.model,
+          role: opts.role,
+          mode: turn.mode,
+          instruction: turn.instruction,
+          ...(turn.payload !== undefined ? { payload: turn.payload } : {}),
+          ...(turn.tools ?? opts.tools ? { tools: turn.tools ?? opts.tools } : {}),
+          ...(turn.cwd ?? opts.cwd ? { cwd: turn.cwd ?? opts.cwd } : {}),
+        };
+        const res = await invoke<T>(req, sessionId);
+        if (res.sessionId) sessionId = res.sessionId;
+        return { text: res.text, data: res.data, usage: res.usage };
+      },
+      close() {
+        closed = true;
+      },
+    };
   }
 }

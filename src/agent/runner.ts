@@ -41,3 +41,69 @@ export interface AgentResponse<T = unknown> {
 export interface AgentRunner {
   run<T = unknown>(req: AgentRequest): Promise<AgentResponse<T>>;
 }
+
+/**
+ * One turn within a persistent session. Team/model/role come from the session;
+ * a turn only varies the mode, instruction, payload, and optional per-turn tools/cwd.
+ */
+export interface AgentTurn {
+  readonly mode: AgentMode;
+  readonly instruction: string;
+  readonly payload?: unknown;
+  readonly tools?: readonly string[];
+  readonly cwd?: string;
+}
+
+export interface SessionOptions {
+  readonly team: string;
+  readonly model: string;
+  readonly role: string;
+  readonly tools?: readonly string[];
+  readonly cwd?: string;
+}
+
+/**
+ * A persistent agent context. Unlike `run()` (a cold completion), a session
+ * retains prior turns — so the Helm-Leader stays one mind across spec, workflow,
+ * and steering instead of three disconnected calls. Transport is resume-by-id:
+ * each `send` is self-contained, the context lives server-side, so there is no
+ * long-lived process to leak and `close()` is cheap.
+ */
+export interface AgentSession {
+  /** The underlying session id, once known (after the first turn). */
+  readonly id: string | null;
+  send<T = unknown>(turn: AgentTurn): Promise<AgentResponse<T>>;
+  close(): void;
+}
+
+export interface StatefulAgentRunner extends AgentRunner {
+  openSession(opts: SessionOptions): AgentSession;
+}
+
+export const supportsSessions = (r: AgentRunner): r is StatefulAgentRunner =>
+  typeof (r as Partial<StatefulAgentRunner>).openSession === "function";
+
+/**
+ * Open a persistent session if the runner supports one; otherwise fall back to a
+ * stateless adapter that issues an independent `run()` per turn. The engine can
+ * therefore always program against a session, and unknown runners still work
+ * (just without continuity).
+ */
+export const openSession = (runner: AgentRunner, opts: SessionOptions): AgentSession => {
+  if (supportsSessions(runner)) return runner.openSession(opts);
+  return {
+    id: null,
+    send: <T>(turn: AgentTurn) =>
+      runner.run<T>({
+        team: opts.team,
+        model: opts.model,
+        role: opts.role,
+        mode: turn.mode,
+        instruction: turn.instruction,
+        ...(turn.payload !== undefined ? { payload: turn.payload } : {}),
+        ...(turn.tools ?? opts.tools ? { tools: turn.tools ?? opts.tools } : {}),
+        ...(turn.cwd ?? opts.cwd ? { cwd: turn.cwd ?? opts.cwd } : {}),
+      }),
+    close: () => {},
+  };
+};

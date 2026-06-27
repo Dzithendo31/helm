@@ -55,6 +55,46 @@ describe("parseEnvelope", () => {
     expect(text).toBe("not json");
     expect(usage.inputTokens).toBe(0);
   });
+
+  test("extracts the session id when present", () => {
+    expect(parseEnvelope(envelope({ session_id: "sess-123" })).sessionId).toBe("sess-123");
+    expect(parseEnvelope(envelope()).sessionId).toBeNull();
+  });
+});
+
+describe("ClaudeCliRunner.buildArgs (resume)", () => {
+  test("a resumed turn passes --resume and omits --system-prompt", () => {
+    const args = new ClaudeCliRunner().buildArgs(req, "sess-9");
+    expect(args).toContain("--resume");
+    expect(args[args.indexOf("--resume") + 1]).toBe("sess-9");
+    expect(args).not.toContain("--system-prompt");
+  });
+});
+
+describe("ClaudeCliRunner.openSession", () => {
+  test("seeds the system prompt on turn 1, then resumes by id on later turns", async () => {
+    const calls: string[][] = [];
+    const runner = new ClaudeCliRunner({
+      exec: async (_bin, args) => {
+        calls.push([...args]);
+        return { stdout: envelope({ session_id: "sess-abc" }), stderr: "", code: 0 };
+      },
+    });
+    const session = runner.openSession({ team: "Helm-Leader", model: "m", role: "LEADER ROLE" });
+
+    await session.send({ mode: "spec", instruction: "write spec" });
+    expect(session.id).toBe("sess-abc");
+    expect(calls[0]).toContain("--system-prompt");
+    expect(calls[0]).not.toContain("--resume");
+
+    await session.send({ mode: "workflow", instruction: "design workflow" });
+    expect(calls[1]).toContain("--resume");
+    expect(calls[1][calls[1].indexOf("--resume") + 1]).toBe("sess-abc");
+    expect(calls[1]).not.toContain("--system-prompt");
+
+    session.close();
+    await expect(session.send({ mode: "steer", instruction: "x" })).rejects.toThrow(/closed/);
+  });
 });
 
 describe("ClaudeCliRunner", () => {

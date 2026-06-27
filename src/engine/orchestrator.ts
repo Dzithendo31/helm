@@ -39,7 +39,7 @@ import {
   type TriageDecision,
 } from "../core/triage";
 import type { WorkflowBody } from "../core/workflow";
-import type { AgentRunner, AgentUsage } from "../agent/runner";
+import { openSession, type AgentRunner, type AgentUsage } from "../agent/runner";
 import {
   DRIFT_SCHEMA,
   RESEARCH_SCHEMA,
@@ -259,6 +259,15 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
   let ledger = emptyLedger();
   const reviews: ReviewBody[] = [];
 
+  // The Helm-Leader is one persistent context for the whole run: spec, workflow,
+  // and mid-run steering are turns in a single session, not disconnected calls.
+  const leaderCfg = teams["Helm-Leader"];
+  const leader = openSession(runner, {
+    team: leaderCfg.name,
+    model: leaderCfg.model,
+    role: leaderCfg.role,
+  });
+
   // REQ #2: hand the draft spec to the Research team to ground it (reading code when a
   // workspace is available) until it is confident, then return the refined requirements.
   const groundDraftSpec = async (draft: ReqSeed[]): Promise<ReqSeed[]> => {
@@ -312,10 +321,7 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
 
   for (let attempt = 0; attempt <= MAX_SPEC_REVISIONS; attempt += 1) {
     report({ kind: "begin", icon: "⚓", label: "Helm-Leader · writing the spec" });
-    const specRes = await runner.run({
-      team: teams["Helm-Leader"].name,
-      model: teams["Helm-Leader"].model,
-      role: teams["Helm-Leader"].role,
+    const specRes = await leader.send({
       mode: "spec",
       instruction: withSchema(
         feedback
@@ -364,6 +370,7 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
   );
 
   if (malformed || !approved) {
+    leader.close();
     const reason = malformed ? "spec produced no parseable requirements" : "spec not approved";
     specArtifact = transition(specArtifact, "Blocked", {
       team: "Helm-Leader",
@@ -420,10 +427,7 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
 
   // ── 2. Leader designs the Workflow (REQ-4) ────────────────────────────────
   report({ kind: "begin", icon: "⚓", label: "Helm-Leader · designing the workflow" });
-  const wfRes = await runner.run({
-    team: teams["Helm-Leader"].name,
-    model: teams["Helm-Leader"].model,
-    role: teams["Helm-Leader"].role,
+  const wfRes = await leader.send({
     mode: "workflow",
     instruction: withSchema("Design a workflow sized to this request's complexity.", WORKFLOW_SCHEMA),
     payload: { requirements },
@@ -668,10 +672,7 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
     for (const message of inbox.drain()) {
       report({ kind: "info", icon: "💬", label: `You: ${message}` });
       try {
-        const res = await runner.run<{ reply?: unknown; guidance?: unknown }>({
-          team: teams["Helm-Leader"].name,
-          model: teams["Helm-Leader"].model,
-          role: teams["Helm-Leader"].role,
+        const res = await leader.send<{ reply?: unknown; guidance?: unknown }>({
           mode: "steer",
           instruction: withSchema(
             `The human sent a message mid-run: "${message}". Reply briefly. If it should change the remaining work, give concrete guidance; otherwise leave guidance "".`,
@@ -853,6 +854,7 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
     ...(verification ? { verification } : {}),
   });
 
+  leader.close();
   return {
     runId,
     status,

@@ -1,7 +1,15 @@
 import type { Finding, ReviewBody } from "../core/review";
 import type { RequirementId } from "../core/spec";
 import type { TaskBody } from "../core/task";
-import type { AgentRequest, AgentResponse, AgentRunner, AgentUsage } from "./runner";
+import type {
+  AgentRequest,
+  AgentResponse,
+  AgentSession,
+  AgentTurn,
+  AgentUsage,
+  SessionOptions,
+  StatefulAgentRunner,
+} from "./runner";
 
 export interface MockRequirementSeed {
   readonly statement: string;
@@ -57,7 +65,7 @@ const asTarget = (payload: unknown): string => {
  * fully-covered, no-drift run. Tests drive edge cases (blocker loops,
  * missing/extraneous tasks) via the options.
  */
-export class MockAgentRunner implements AgentRunner {
+export class MockAgentRunner implements StatefulAgentRunner {
   private readonly options: MockOptions;
   private critiqueIndex = 0;
 
@@ -70,6 +78,34 @@ export class MockAgentRunner implements AgentRunner {
     const data = this.dataFor(req);
     return { text: JSON.stringify(data), data: data as T, usage };
   }
+
+  /** A deterministic in-memory session: each turn delegates to `run` with a stable id. */
+  openSession(opts: SessionOptions): AgentSession {
+    let turns = 0;
+    const run = this.run.bind(this);
+    const id = `mock-session-${(MockAgentRunner.sessionSeq += 1)}`;
+    return {
+      id,
+      send<T>(turn: AgentTurn): Promise<AgentResponse<T>> {
+        turns += 1;
+        return run<T>({
+          team: opts.team,
+          model: opts.model,
+          role: opts.role,
+          mode: turn.mode,
+          instruction: turn.instruction,
+          ...(turn.payload !== undefined ? { payload: turn.payload } : {}),
+          ...(turn.tools ?? opts.tools ? { tools: turn.tools ?? opts.tools } : {}),
+          ...(turn.cwd ?? opts.cwd ? { cwd: turn.cwd ?? opts.cwd } : {}),
+        });
+      },
+      close() {
+        void turns;
+      },
+    };
+  }
+
+  private static sessionSeq = 0;
 
   private dataFor(req: AgentRequest): unknown {
     switch (req.mode) {
