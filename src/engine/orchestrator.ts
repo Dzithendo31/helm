@@ -53,6 +53,7 @@ import {
 import { runGate } from "../teams/gate";
 import type { TeamConfig, Teams } from "../teams/types";
 import type { HelmConfig } from "../config";
+import { Budget, type BudgetLimits } from "./budget";
 import type { HumanInterface } from "./checkpoints";
 import { noopReporter, type Reporter } from "./events";
 import { noopInbox, type Inbox } from "./inbox";
@@ -94,6 +95,8 @@ export interface RunInput {
   readonly groundSpec?: boolean;
   /** Test command run in the workspace to verify `tested` (build mode). Auto-detected if omitted. */
   readonly testCommand?: string;
+  /** Hard ceiling on tokens / delegated calls. Once crossed, remaining work escalates to human. */
+  readonly budget?: BudgetLimits;
 }
 
 export interface RunResult {
@@ -258,6 +261,7 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
   const runId = newId("run");
   let ledger = emptyLedger();
   const reviews: ReviewBody[] = [];
+  const budget = new Budget(input.budget);
 
   // The Helm-Leader is one persistent context for the whole run: spec, workflow,
   // and mid-run steering are turns in a single session, not disconnected calls.
@@ -668,6 +672,35 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
     }
   };
 
+  // When the budget is spent, remaining requirements are not dispatched — they
+  // escalate to a human instead of letting the run spend without bound (R1/R5).
+  const budgetSkip = (reqId: string): ReqResult => {
+    const entry = reqByIndex.get(reqId);
+    const index = entry?.index ?? 0;
+    const task = transition(
+      createArtifact<TaskBody>({
+        type: "Task",
+        body: { title: `Deferred: ${reqId}`, summary: `Not started — ${budget.reason}.`, refs: [reqId], files: [], tested: false, reviewed: false },
+        refs: [reqId],
+        provenance: { team: "Helm-Leader", agent: "supervisor", reason: "budget exhausted" },
+      }),
+      "NeedsHuman",
+      { team: "Helm-Leader", agent: "supervisor", reason: budget.reason },
+    );
+    report({ kind: "info", icon: "⚠", label: `${reqId} deferred · ${budget.reason}`, status: "warn" });
+    return {
+      index,
+      task,
+      decision: { req: reqId, risk: "medium", confidence: "medium", rigor: "self-review", researched: false },
+      reviews: [],
+      ledgerEntries: [],
+      escalated: true,
+    };
+  };
+
+  // Seed the budget with what the spec/grounding/workflow phases already spent.
+  for (const e of ledger.entries) budget.charge(e);
+
   // Run each dependency wave; requirements within a wave run up to `concurrency` at a time.
   const results: ReqResult[] = [];
 
@@ -705,7 +738,14 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
     }
     for (let i = 0; i < wave.length; i += concurrency) {
       const chunk = wave.slice(i, i + concurrency);
-      results.push(...(await Promise.all(chunk.map(processRequirement))));
+      const ran = await Promise.all(chunk.map((reqId) => (budget.canSpend ? processRequirement(reqId) : Promise.resolve(budgetSkip(reqId)))));
+      results.push(...ran);
+      // Charge what this chunk spent so the next chunk sees the updated budget.
+      for (const r of ran) {
+        if (r.ledgerEntries.length === 0) continue;
+        for (const e of r.ledgerEntries) budget.charge(e);
+        budget.countCall();
+      }
     }
   }
   await processMessages();

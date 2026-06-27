@@ -51,6 +51,31 @@ describe("orchestrator", () => {
     expect(result.tasks.every((t) => t.state === "TeamApproved")).toBe(true);
   });
 
+  test("a spent budget defers remaining requirements to a human instead of dispatching", async () => {
+    const runner = new MockAgentRunner({
+      requirements: [
+        { statement: "First capability." },
+        { statement: "Second capability." },
+        { statement: "Third capability." },
+      ],
+    });
+    const result = await runHelm({
+      request: "build three things",
+      config: defaultConfig(),
+      runner,
+      human: new AutoApproveHuman(),
+      teams,
+      baseDir,
+      budget: { maxTokens: 500, maxToolCalls: 100 }, // spec+grounding+workflow already exceed this
+    });
+
+    expect(result.status).toBe("needs-human");
+    expect(result.tasks).toHaveLength(3);
+    // Nothing was implemented — every task is a deferred NeedsHuman citing the budget.
+    expect(result.tasks.every((t) => t.state === "NeedsHuman")).toBe(true);
+    expect(result.tasks.every((t) => t.body.summary.includes("budget"))).toBe(true);
+  });
+
   test("spec rejection halts before any work as needs-human", async () => {
     const result = await runHelm({
       request: "build a thing",
