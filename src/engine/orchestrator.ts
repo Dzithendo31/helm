@@ -261,11 +261,15 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
 
   // The Helm-Leader is one persistent context for the whole run: spec, workflow,
   // and mid-run steering are turns in a single session, not disconnected calls.
+  // When a workspace is available the Leader gets read-only tools so it can ground
+  // its spec and workflow in the actual codebase (Phase 3). Bounded by the runner timeout.
   const leaderCfg = teams["Helm-Leader"];
+  const leaderCwd = input.devWritesFiles === true && typeof input.workspace === "string" ? input.workspace : undefined;
   const leader = openSession(runner, {
     team: leaderCfg.name,
     model: leaderCfg.model,
     role: leaderCfg.role,
+    ...(leaderCwd ? { tools: [...RESEARCH_READ_TOOLS], cwd: leaderCwd } : {}),
   });
 
   // REQ #2: hand the draft spec to the Research team to ground it (reading code when a
@@ -326,7 +330,7 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
       instruction: withSchema(
         feedback
           ? `Revise the Spec given this feedback: ${feedback}`
-          : `Write a MINIMAL Spec for this request: ${input.request}. Use the FEWEST requirements that capture genuinely distinct behaviour — do NOT split one function, file, or concern into multiple requirements, and fold edge cases into a single requirement's acceptance criteria. A small task is usually 1–2 requirements, rarely more than 4. Keep each statement to one concise sentence.`,
+          : `Write a MINIMAL Spec for this request: ${input.request}. Use the FEWEST requirements that capture genuinely distinct behaviour — do NOT split one function, file, or concern into multiple requirements, and fold edge cases into a single requirement's acceptance criteria. A small task is usually 1–2 requirements, rarely more than 4. Keep each statement to one concise sentence.${leaderCwd ? " Inspect the existing codebase with Read/Grep/Glob first, and ground the requirements in what is already there." : ""}`,
         SPEC_SCHEMA,
       ),
       payload: { request: input.request, feedback },
