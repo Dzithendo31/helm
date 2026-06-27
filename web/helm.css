@@ -202,6 +202,7 @@ input { font-family: var(--font-body); }
 .tb-btn:hover { border-color: var(--helm-border-bright); color: var(--text-primary); }
 .tb-btn.active-amber { color: var(--role-helm); border-color: rgba(245,166,35,0.5); background: rgba(245,166,35,0.08); box-shadow: 0 0 14px rgba(245,166,35,0.2); }
 .tb-btn.active-violet { color: var(--role-research); border-color: rgba(155,109,255,0.5); background: rgba(155,109,255,0.08); box-shadow: 0 0 14px rgba(155,109,255,0.2); }
+.tb-btn.active-pilot { color: var(--status-active); border-color: rgba(0,255,148,0.5); background: rgba(0,255,148,0.08); box-shadow: 0 0 14px rgba(0,255,148,0.2); }
 
 .token-counter {
   display: flex; align-items: center; gap: 10px;

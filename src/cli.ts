@@ -112,7 +112,7 @@ const parseArgs = (argv: readonly string[]): ParsedArgs => {
   let build = false;
   let groundSpec = true;
   let transcript = false;
-  let leaderDrives = false;
+  let leaderDrives = true;
   let modelOverride: string | undefined;
   let workspace: string | undefined;
   let testCommand: string | undefined;
@@ -131,7 +131,7 @@ const parseArgs = (argv: readonly string[]): ParsedArgs => {
       case "--build": build = true; break;
       case "--no-ground-spec": groundSpec = false; break;
       case "--transcript": transcript = true; break;
-      case "--leader-drives": leaderDrives = true; break;
+      case "--no-leader-drives": leaderDrives = false; break;
       case "--model": modelOverride = argv[++i]; break;
       case "--workspace": workspace = argv[++i]; break;
       case "--test-cmd": testCommand = argv[++i]; break;
@@ -183,7 +183,7 @@ const main = async (): Promise<void> => {
   if (!args.request) {
     process.stderr.write(
       'Usage: helm "<request>" [--cli|--sdk|--mock] [--autonomous] [--no-team-mode]\n' +
-        "             [--no-optimise] [--bare] [--model <id>] [--build --workspace <dir>] [--transcript] [--leader-drives]\n",
+        "             [--no-optimise] [--no-leader-drives] [--bare] [--model <id>] [--build --workspace <dir>] [--transcript]\n",
     );
     process.exitCode = 1;
     return;
@@ -251,7 +251,8 @@ const main = async (): Promise<void> => {
       inbox,
       groundSpec: args.groundSpec,
       ...(args.transcript ? { recordTranscripts: true } : {}),
-      ...(args.leaderDrives ? { leaderDrives: true } : {}),
+      // Leader-driven is the default; only real runners can host the in-process tools.
+      ...(args.leaderDrives && args.runner !== "mock" ? { leaderDrives: true } : {}),
       ...(args.testCommand ? { testCommand: args.testCommand } : {}),
       ...(args.build && workspace ? { devWritesFiles: true, workspace } : {}),
     });

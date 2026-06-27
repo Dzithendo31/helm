@@ -83,7 +83,7 @@ export class UiSession {
       runId: null,
       request: null,
       status: "idle",
-      config: { teamMode: true, optimise: true },
+      config: { teamMode: true, optimise: true, leaderDrives: true },
       teams: TEAM_DEFS.map((t) => ({ ...t, status: "idle", task: "", tokens: 0 })),
       requirements: [],
       artifacts: [],
@@ -221,7 +221,7 @@ export class UiSession {
     this.state.savedTokens = 0;
     this.state.pending = null;
     this.state.chat = [];
-    this.state.config = { teamMode, optimise };
+    this.state.config = { teamMode, optimise, leaderDrives: this.state.config.leaderDrives };
     for (const t of this.state.teams) {
       t.status = "idle";
       t.task = "";
@@ -264,6 +264,9 @@ export class UiSession {
         groundSpec: true,
         baseDir: this.opts.baseDir,
         recordTranscripts: true,
+        // Leader-driven is the normal configuration; only the real (cli) runner can
+        // host the in-process tools, so mock dev runs fall back to the classic path.
+        leaderDrives: this.state.config.leaderDrives && this.opts.runnerKind === "cli",
         ...(workspace ? { devWritesFiles: true, workspace } : {}),
       });
       this.finalize(result);
@@ -347,6 +350,7 @@ export class UiSession {
       case "setConfig": {
         if (typeof cmd.teamMode === "boolean") this.state.config.teamMode = cmd.teamMode;
         if (typeof cmd.optimise === "boolean") this.state.config.optimise = cmd.optimise;
+        if (typeof cmd.leaderDrives === "boolean") this.state.config.leaderDrives = cmd.leaderDrives;
         this.emit({ type: "config", config: { ...this.state.config } });
         return { ok: true };
       }

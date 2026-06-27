@@ -82,7 +82,7 @@ export interface UiState {
   runId: string | null;
   request: string | null;
   status: UiRunStatus;
-  config: { teamMode: boolean; optimise: boolean };
+  config: { teamMode: boolean; optimise: boolean; leaderDrives: boolean };
   teams: UiTeam[];
   requirements: UiRequirement[];
   artifacts: UiArtifact[];
@@ -108,16 +108,16 @@ export type UiEvent =
   | { seq: number; type: "pending"; pending: UiPending | null }
   | { seq: number; type: "requirements"; requirements: UiRequirement[] }
   | { seq: number; type: "chat"; message: UiChatMessage }
-  | { seq: number; type: "config"; config: { teamMode: boolean; optimise: boolean } };
+  | { seq: number; type: "config"; config: { teamMode: boolean; optimise: boolean; leaderDrives: boolean } };
 
 /** Commands the UI sends to /api/command. */
 export type UiCommand =
-  | { kind: "newRun"; request: string; teamMode?: boolean; optimise?: boolean; workspace?: string }
+  | { kind: "newRun"; request: string; teamMode?: boolean; optimise?: boolean; leaderDrives?: boolean; workspace?: string }
   | { kind: "approveSpec" }
   | { kind: "rejectSpec"; feedback?: string }
   | { kind: "answer"; ref: string; text: string }
   | { kind: "steer"; message: string }
-  | { kind: "setConfig"; teamMode?: boolean; optimise?: boolean }
+  | { kind: "setConfig"; teamMode?: boolean; optimise?: boolean; leaderDrives?: boolean }
   | { kind: "interrupt" };
 
 export const TEAM_DEFS: ReadonlyArray<{ id: string; role: UiRole; name: string }> = [

@@ -25,8 +25,8 @@ function injectArtifact(a) {
 
 // ---------- Top Bar ----------
 function TopBar(props) {
-  const { teamMode, optimizeMode, brainOpen, anyActive, tokenCount, currentTask, workspace, busy,
-          onToggleTeam, onToggleOptimize, onToggleBrain, onTalkToLeader, onWorkspaceChange } = props;
+  const { teamMode, optimizeMode, brainOpen, pilot, anyActive, tokenCount, currentTask, workspace, busy,
+          onToggleTeam, onToggleOptimize, onToggleBrain, onTogglePilot, onTalkToLeader, onWorkspaceChange } = props;
   return ap('div', { className: 'topbar area-top' },
     ap('div', { className: 'topbar-cluster' },
       ap('div', { className: 'helm-logo' },
@@ -45,6 +45,10 @@ function TopBar(props) {
         ap('span', { style: { color: 'var(--text-muted)', fontSize: 11, marginLeft: 4 } }, '\u25c9\u25c9'))),
 
     ap('div', { className: 'topbar-cluster' },
+      ap('button', { className: 'tb-btn' + (pilot ? ' active-pilot' : ''), onClick: onTogglePilot,
+        title: pilot ? 'Leader is driving the run (the normal Helm configuration). Click to hand sequencing back to the engine.'
+                     : 'Engine sequences the run. Click to let the Helm-Leader drive.' },
+        ap(IconHelm, { size: 14 }), pilot ? 'PILOT' : 'MANUAL'),
       ap('button', { className: 'tb-toggle' + (teamMode ? ' on' : ''), onClick: onToggleTeam, title: 'Toggle team mode' },
         ap('span', { className: 'sw' }), teamMode ? 'TEAM' : 'SOLO'),
       ap('button', { className: 'tb-btn' + (optimizeMode ? ' active-amber' : ''), onClick: onToggleOptimize },
@@ -111,6 +115,7 @@ function HelmApp() {
   const [liveRequirements, setLiveRequirements] = auseState([]);
   const [liveRequest, setLiveRequest] = auseState(null);
   const [liveWorkspace, setLiveWorkspace] = auseState('');
+  const [pilot, setPilot] = auseState(true); // Leader-driven is the normal Helm configuration
 
   const dockedMap = {
     'dev-team': [artById('spec-1'), artById('task-42')],
@@ -180,6 +185,7 @@ function HelmApp() {
           setLiveRequirements(ev.state.requirements || []);
           setLiveRequest(ev.state.request);
           setLiveWorkspace(w => w || (ev.state.workspace || ''));
+          if (ev.state.config) setPilot(ev.state.config.leaderDrives !== false);
           if (ev.state.chat && ev.state.chat.length) {
             setChatLog(c => [c[0], ...ev.state.chat.map((m, i) => ({
               id: 'snap-c-' + i, role: m.role === 'leader' ? 'helm' : 'user', text: m.text,
@@ -192,6 +198,7 @@ function HelmApp() {
         case 'status': setLiveStatus(ev.status); break;
         case 'pending': setLivePending(ev.pending); break;
         case 'requirements': setLiveRequirements(ev.requirements || []); break;
+        case 'config': if (ev.config) setPilot(ev.config.leaderDrives !== false); break;
         case 'chat':
           // The user's own line is echoed locally on send; only the Leader's replies arrive here.
           if (ev.message && ev.message.role === 'leader') {
@@ -376,10 +383,11 @@ function HelmApp() {
 
   return ap('div', { className: 'helm-root' + (leftCollapsed ? ' left-collapsed' : '') + (rightCollapsed ? ' right-collapsed' : '') + (consoleCollapsed ? ' console-collapsed' : '') },
     ap(TopBar, {
-      teamMode, optimizeMode, brainOpen, tokenCount, currentTask: liveCurrentTask,
+      teamMode, optimizeMode, brainOpen, pilot, tokenCount, currentTask: liveCurrentTask,
       anyActive: LIVE ? !!activeTeam : anyActive,
       workspace: liveWorkspace, busy: !liveIdle,
       onWorkspaceChange: setLiveWorkspace,
+      onTogglePilot: () => { const next = !pilot; setPilot(next); apiCmd({ kind: 'setConfig', leaderDrives: next }); },
       onToggleTeam: () => { setTeamMode(m => !m); setLayoutVersion(v => v + 1); },
       onToggleOptimize: () => setOptimizeMode(m => !m),
       onToggleBrain: () => setBrainOpen(b => !b),
