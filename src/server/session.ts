@@ -14,6 +14,7 @@ import { runHelm, type RunResult, type RunStatus } from "../engine/orchestrator"
 import {
   TEAM_DEFS,
   type UiArtifact,
+  type UiChatMessage,
   type UiCommand,
   type UiEvent,
   type UiPending,
@@ -92,6 +93,7 @@ export class UiSession {
       savedTokens: 0,
       pending: null,
       workspace: opts.workspace ?? null,
+      chat: [],
     };
   }
 
@@ -160,10 +162,17 @@ export class UiSession {
     this.emit({ type: "artifact", artifact: a });
   }
 
-  /** The engine's Reporter, bridged into log lines + team-node status. */
+  private addChat(message: UiChatMessage): void {
+    this.state.chat.push(message);
+    if (this.state.chat.length > 100) this.state.chat.shift();
+    this.emit({ type: "chat", message });
+  }
+
+  /** The engine's Reporter, bridged into log lines + team-node status + chat thread. */
   private readonly reporter: Reporter = (e: RunEvent) => {
     const level = e.status === "error" ? "error" : e.status === "warn" ? "warn" : e.kind === "info" ? "info" : "ok";
     this.log(e.icon ?? "·", e.label, level);
+    if (e.chat) this.addChat(e.chat);
     const teamId = e.icon ? ICON_TEAM[e.icon] : undefined;
     if (!teamId) return;
     // begin/info => the team is working; end => it finished. (Reasoning-mode steps
@@ -211,6 +220,7 @@ export class UiSession {
     this.state.costUsd = 0;
     this.state.savedTokens = 0;
     this.state.pending = null;
+    this.state.chat = [];
     this.state.config = { teamMode, optimise };
     for (const t of this.state.teams) {
       t.status = "idle";

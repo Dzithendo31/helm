@@ -670,7 +670,7 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
   // Drain any mid-run human messages and let the Leader reply + steer the rest of the run.
   const processMessages = async (): Promise<void> => {
     for (const message of inbox.drain()) {
-      report({ kind: "info", icon: "💬", label: `You: ${message}` });
+      report({ kind: "info", icon: "💬", label: `You: ${message}`, chat: { role: "user", text: message } });
       try {
         const res = await leader.send<{ reply?: unknown; guidance?: unknown }>({
           mode: "steer",
@@ -686,7 +686,7 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
         ledger = record(ledger, led(teams["Helm-Leader"], "steer", res.usage));
         const reply = typeof res.data?.reply === "string" && res.data.reply ? res.data.reply : "(acknowledged)";
         const guidance = typeof res.data?.guidance === "string" ? res.data.guidance.trim() : "";
-        report({ kind: "info", icon: "⚓", label: `Helm-Leader: ${reply}` });
+        report({ kind: "info", icon: "⚓", label: `Helm-Leader: ${reply}`, chat: { role: "leader", text: reply } });
         if (guidance) steering.push(guidance);
       } catch {
         report({ kind: "info", icon: "⚠", label: "Helm-Leader could not process the message" });

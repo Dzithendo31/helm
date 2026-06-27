@@ -9,6 +9,8 @@ export interface RunEvent {
   readonly label: string;
   readonly icon?: string;
   readonly status?: "ok" | "warn" | "error";
+  /** Conversational turn between the human and the Leader, for the UI chat thread. */
+  readonly chat?: { readonly role: "user" | "leader"; readonly text: string };
 }
 
 export type Reporter = (event: RunEvent) => void;

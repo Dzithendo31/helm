@@ -72,6 +72,12 @@ export interface UiRequirement {
   readonly statement: string;
 }
 
+/** A turn in the Leader conversation surfaced to the UI chat thread. */
+export interface UiChatMessage {
+  readonly role: "user" | "leader";
+  readonly text: string;
+}
+
 export interface UiState {
   runId: string | null;
   request: string | null;
@@ -87,6 +93,8 @@ export interface UiState {
   pending: UiPending | null;
   /** Absolute folder the Dev team writes real files into (build mode). */
   workspace: string | null;
+  /** Recent Leader ↔ human conversation (most-recent-trimmed). */
+  chat: UiChatMessage[];
 }
 
 /** Incremental events streamed to connected clients (sequence-numbered for replay). */
@@ -99,6 +107,7 @@ export type UiEvent =
   | { seq: number; type: "tokens"; tokens: number; costUsd: number; savedTokens: number }
   | { seq: number; type: "pending"; pending: UiPending | null }
   | { seq: number; type: "requirements"; requirements: UiRequirement[] }
+  | { seq: number; type: "chat"; message: UiChatMessage }
   | { seq: number; type: "config"; config: { teamMode: boolean; optimise: boolean } };
 
 /** Commands the UI sends to /api/command. */

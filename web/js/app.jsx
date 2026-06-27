@@ -180,6 +180,11 @@ function HelmApp() {
           setLiveRequirements(ev.state.requirements || []);
           setLiveRequest(ev.state.request);
           setLiveWorkspace(w => w || (ev.state.workspace || ''));
+          if (ev.state.chat && ev.state.chat.length) {
+            setChatLog(c => [c[0], ...ev.state.chat.map((m, i) => ({
+              id: 'snap-c-' + i, role: m.role === 'leader' ? 'helm' : 'user', text: m.text,
+            }))]);
+          }
           break;
         case 'log': setLogs(l => [...l.slice(-240), liveLogLine(ev.line)]); break;
         case 'tokens': setTokenCount(ev.tokens); break;
@@ -187,6 +192,12 @@ function HelmApp() {
         case 'status': setLiveStatus(ev.status); break;
         case 'pending': setLivePending(ev.pending); break;
         case 'requirements': setLiveRequirements(ev.requirements || []); break;
+        case 'chat':
+          // The user's own line is echoed locally on send; only the Leader's replies arrive here.
+          if (ev.message && ev.message.role === 'leader') {
+            setChatLog(c => [...c, { id: 'lv' + (++lc.current), role: 'helm', text: ev.message.text }]);
+          }
+          break;
         case 'artifact': injectArtifact(ev.artifact); setLiveArtifacts(a => [...a, ev.artifact]); break;
       }
     };
@@ -314,23 +325,8 @@ function HelmApp() {
   // cleanup
   auseEffect(() => () => { demoTimers.current.forEach(clearTimeout); analyzeTimers.current.forEach(clearTimeout); clearInterval(chatStream.current); }, []);
 
-  // ---- Helm-Leader chat ----
+  // ---- Helm-Leader chat ---- (replies arrive live over SSE; see the 'chat' event)
   const talkToLeader = () => { setSelected('helm-leader'); setRightCollapsed(false); };
-  const sendToLeader = (text) => {
-    const ctx = { tokenCount, taskTitle: (tasks.find(t => t.id === activeTaskId) || {}).title || 'the active task', blocked: !!blockedTeam };
-    const uid = 'cu' + (++lc.current);
-    setChatLog(c => [...c, { id: uid, role: 'user', text }]);
-    const reply = leaderReply(text, ctx);
-    const hid = 'ch' + (++lc.current);
-    setChatLog(c => [...c, { id: hid, role: 'helm', text: '', streaming: true, action: reply.action }]);
-    clearInterval(chatStream.current);
-    let i = 0;
-    chatStream.current = setInterval(() => {
-      i += 2;
-      setChatLog(c => c.map(m => m.id === hid ? { ...m, text: reply.text.slice(0, i) } : m));
-      if (i >= reply.text.length) { clearInterval(chatStream.current); setChatLog(c => c.map(m => m.id === hid ? { ...m, text: reply.text, streaming: false } : m)); }
-    }, 16);
-  };
   const onChatAction = (kind) => {
     if (kind === 'optimize') setOptimizeMode(true);
     else if (kind === 'newtask') setModal({ type: 'newtask' });
@@ -434,7 +430,7 @@ function HelmApp() {
     ap(RightDock, {
       collapsed: rightCollapsed, onToggle: () => setRightCollapsed(c => !c),
       selected, live, onSelectAgent, onSendInstruction, onReassign, onKill,
-      chatLog, onChatSend: LIVE ? liveSend : sendToLeader, onChatAction, tokenCount, onTalkToLeader: talkToLeader,
+      chatLog, onChatSend: liveSend, onChatAction, tokenCount, onTalkToLeader: talkToLeader,
     }),
 
     ap(Console, { logs, messages, errors, collapsed: consoleCollapsed, onToggle: () => setConsoleCollapsed(c => !c), onClear: () => { setLogs([]); setMessages([]); }, onPauseChange: setPaused }),
