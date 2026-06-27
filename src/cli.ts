@@ -95,6 +95,7 @@ interface ParsedArgs {
   readonly build: boolean;
   readonly groundSpec: boolean;
   readonly transcript: boolean;
+  readonly leaderDrives: boolean;
   readonly modelOverride?: string;
   readonly workspace?: string;
   readonly testCommand?: string;
@@ -111,6 +112,7 @@ const parseArgs = (argv: readonly string[]): ParsedArgs => {
   let build = false;
   let groundSpec = true;
   let transcript = false;
+  let leaderDrives = false;
   let modelOverride: string | undefined;
   let workspace: string | undefined;
   let testCommand: string | undefined;
@@ -129,6 +131,7 @@ const parseArgs = (argv: readonly string[]): ParsedArgs => {
       case "--build": build = true; break;
       case "--no-ground-spec": groundSpec = false; break;
       case "--transcript": transcript = true; break;
+      case "--leader-drives": leaderDrives = true; break;
       case "--model": modelOverride = argv[++i]; break;
       case "--workspace": workspace = argv[++i]; break;
       case "--test-cmd": testCommand = argv[++i]; break;
@@ -145,6 +148,7 @@ const parseArgs = (argv: readonly string[]): ParsedArgs => {
     build,
     groundSpec,
     transcript,
+    leaderDrives,
     ...(modelOverride ? { modelOverride } : {}),
     ...(workspace ? { workspace } : {}),
     ...(testCommand ? { testCommand } : {}),
@@ -247,6 +251,7 @@ const main = async (): Promise<void> => {
       inbox,
       groundSpec: args.groundSpec,
       ...(args.transcript ? { recordTranscripts: true } : {}),
+      ...(args.leaderDrives ? { leaderDrives: true } : {}),
       ...(args.testCommand ? { testCommand: args.testCommand } : {}),
       ...(args.build && workspace ? { devWritesFiles: true, workspace } : {}),
     });

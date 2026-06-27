@@ -100,6 +100,8 @@ export interface RunInput {
   readonly budget?: BudgetLimits;
   /** Tee every agent prompt + response to `transcript.md` in the run store (observability). */
   readonly recordTranscripts?: boolean;
+  /** Phase 4: the Leader drives the run via tools (SDK), with the engine as supervisor. */
+  readonly leaderDrives?: boolean;
 }
 
 export interface RunResult {
@@ -252,6 +254,11 @@ const led = (
 
 /** Run Helm end to end on a single request. */
 export const runHelm = async (input: RunInput): Promise<RunResult> => {
+  // Phase 4: when the Leader drives, hand off to the agentic supervisor.
+  if (input.leaderDrives) {
+    const { runHelmAgentic } = await import("./orchestrator-agentic");
+    return runHelmAgentic(input);
+  }
   const { config, human, teams } = input;
   const report = input.report ?? noopReporter;
   const inbox = input.inbox ?? noopInbox;
