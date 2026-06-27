@@ -263,6 +263,7 @@ export class UiSession {
         inbox: this.inbox,
         groundSpec: true,
         baseDir: this.opts.baseDir,
+        recordTranscripts: true,
         ...(workspace ? { devWritesFiles: true, workspace } : {}),
       });
       this.finalize(result);

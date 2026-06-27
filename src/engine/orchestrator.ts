@@ -40,6 +40,7 @@ import {
 } from "../core/triage";
 import type { WorkflowBody } from "../core/workflow";
 import { openSession, type AgentRunner, type AgentUsage } from "../agent/runner";
+import { TranscriptRunner } from "../agent/transcript";
 import {
   DRIFT_SCHEMA,
   RESEARCH_SCHEMA,
@@ -58,7 +59,7 @@ import type { HumanInterface } from "./checkpoints";
 import { noopReporter, type Reporter } from "./events";
 import { noopInbox, type Inbox } from "./inbox";
 import { buildWaves } from "./scheduler";
-import { persistRun } from "./store";
+import { persistRun, runDir } from "./store";
 import { runVerification, type VerificationResult } from "./verify";
 
 /** Estimated tokens a single QA review pass would cost — for optimise-mode counterfactuals. */
@@ -97,6 +98,8 @@ export interface RunInput {
   readonly testCommand?: string;
   /** Hard ceiling on tokens / delegated calls. Once crossed, remaining work escalates to human. */
   readonly budget?: BudgetLimits;
+  /** Tee every agent prompt + response to `transcript.md` in the run store (observability). */
+  readonly recordTranscripts?: boolean;
 }
 
 export interface RunResult {
@@ -249,7 +252,7 @@ const led = (
 
 /** Run Helm end to end on a single request. */
 export const runHelm = async (input: RunInput): Promise<RunResult> => {
-  const { config, runner, human, teams } = input;
+  const { config, human, teams } = input;
   const report = input.report ?? noopReporter;
   const inbox = input.inbox ?? noopInbox;
   const steering: string[] = []; // guidance the human injects mid-run, folded into later work
@@ -262,6 +265,12 @@ export const runHelm = async (input: RunInput): Promise<RunResult> => {
   let ledger = emptyLedger();
   const reviews: ReviewBody[] = [];
   const budget = new Budget(input.budget);
+
+  // Optionally record every prompt/response to the run store for inspection. The
+  // decorator wraps the runner so the Leader session and all worker calls are teed.
+  const runner: AgentRunner = input.recordTranscripts
+    ? new TranscriptRunner(input.runner, runDir(baseDir, runId))
+    : input.runner;
 
   // The Helm-Leader is one persistent context for the whole run: spec, workflow,
   // and mid-run steering are turns in a single session, not disconnected calls.
